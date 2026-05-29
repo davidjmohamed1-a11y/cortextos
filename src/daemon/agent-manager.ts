@@ -13,6 +13,7 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
+import { refreshHeartbeatTimestamp } from '../bus/heartbeat.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 
@@ -895,6 +896,14 @@ export class AgentManager {
       // dedup-rejected and treated as a dispatch failure.
       const firedAt = new Date().toISOString();
       const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
+      // Bump the agent's heartbeat from the daemon BEFORE injecting the
+      // prompt. The in-session update-heartbeat call from the cron's skill
+      // can race with session init, be superseded by a second cron whose
+      // prompt arrives in the same PTY message, or fail to land at all —
+      // and a missed heartbeat write makes a live agent look stale.
+      // Refreshing here means stale detection reflects "cron has not fired"
+      // rather than "cron fired but write missed."
+      refreshHeartbeatTimestamp(join(this.ctxRoot, 'state', agentName), firedAt);
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { Heartbeat, BusPaths } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
@@ -34,6 +34,29 @@ export function updateHeartbeat(
     join(paths.stateDir, 'heartbeat.json'),
     JSON.stringify(heartbeat),
   );
+}
+
+/**
+ * Bump the `last_heartbeat` timestamp on an existing heartbeat.json,
+ * preserving every other field. Best-effort: no-op when the file does
+ * not exist yet or when any step fails — callers must never have their
+ * primary write blocked by heartbeat housekeeping.
+ *
+ * Used by: logEvent (event-implies-liveness) and the daemon cron
+ * dispatcher (cron-fire-implies-liveness). In both cases the side-effect
+ * proves the agent is reachable even if its in-session update-heartbeat
+ * call races or gets superseded.
+ */
+export function refreshHeartbeatTimestamp(stateDir: string, timestamp?: string): void {
+  try {
+    const hbPath = join(stateDir, 'heartbeat.json');
+    if (!existsSync(hbPath)) return;
+    const hb = JSON.parse(readFileSync(hbPath, 'utf-8')) as Heartbeat;
+    hb.last_heartbeat = (timestamp ?? new Date().toISOString()).replace(/\.\d{3}Z$/, 'Z');
+    atomicWriteSync(hbPath, JSON.stringify(hb));
+  } catch {
+    // Best-effort — primary write already succeeded, heartbeat refresh is secondary.
+  }
 }
 
 /**

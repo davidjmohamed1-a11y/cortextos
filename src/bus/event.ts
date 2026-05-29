@@ -1,9 +1,10 @@
-import { appendFileSync, existsSync, readFileSync } from 'fs';
+import { appendFileSync } from 'fs';
 import { join } from 'path';
-import type { EventCategory, EventSeverity, BusPaths, Heartbeat } from '../types/index.js';
-import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import type { EventCategory, EventSeverity, BusPaths } from '../types/index.js';
+import { ensureDir } from '../utils/atomic.js';
 import { randomString } from '../utils/random.js';
 import { validateEventCategory, validateEventSeverity, isValidJson } from '../utils/validate.js';
+import { refreshHeartbeatTimestamp } from './heartbeat.js';
 
 /**
  * Log a structured event. Appends JSONL line to daily event file.
@@ -65,23 +66,5 @@ export function logEvent(
   appendFileSync(join(eventsDir, `${today}.jsonl`), eventLine + '\n', 'utf-8');
 
   // Refresh heartbeat timestamp as a side-effect. See doc comment above.
-  refreshHeartbeatTimestamp(paths, timestamp);
-}
-
-/**
- * Bump the `last_heartbeat` timestamp on the existing heartbeat.json,
- * preserving every other field. No-op when the file does not exist yet
- * or when any step fails — event writes are the authoritative record
- * and must never be blocked by heartbeat housekeeping.
- */
-function refreshHeartbeatTimestamp(paths: BusPaths, timestamp: string): void {
-  try {
-    const hbPath = join(paths.stateDir, 'heartbeat.json');
-    if (!existsSync(hbPath)) return;
-    const hb = JSON.parse(readFileSync(hbPath, 'utf-8')) as Heartbeat;
-    hb.last_heartbeat = timestamp;
-    atomicWriteSync(hbPath, JSON.stringify(hb));
-  } catch {
-    // Best-effort — event already persisted, heartbeat refresh is secondary.
-  }
+  refreshHeartbeatTimestamp(paths.stateDir, timestamp);
 }
