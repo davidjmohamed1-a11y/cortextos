@@ -23,6 +23,7 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
+import { WhatsAppAPI, normalizeRecipientPhone } from '../whatsapp/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
 import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition } from '../types/index.js';
 
@@ -1016,6 +1017,95 @@ busCommand
       }
 
       console.log('Message sent');
+    } catch (err: any) {
+      console.error(`Failed to send: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('send-whatsapp')
+  .description('Send a WhatsApp message via the Meta Business Cloud API. See WHATSAPP_SETUP.md for first-time setup.')
+  .argument('<phone>', 'Recipient phone in E.164 form, e.g. "+15555551234" or digits-only "15555551234"')
+  .argument('<message>', 'Message text. Outside the 24h window only template messages are deliverable — use --template.')
+  .option('--template <name>', 'Send a pre-approved Message Template instead of free-form text. Required outside the recipient\'s 24h window.')
+  .option('--lang <code>', 'BCP-47 language code for the template (e.g. "en_US"). Required when --template is set.')
+  .action(async (phone: string, message: string, opts: { template?: string; lang?: string }) => {
+    // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
+    // does not expand escapes; mirror send-telegram's normalization here.
+    message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+    // Resolve WhatsApp credentials: agent .env first, then process.env.
+    // Mirrors send-telegram resolution so multi-agent installs can scope
+    // credentials per-agent without falling back to a shared global token.
+    const env = resolveEnv();
+    let accessToken = '';
+    let phoneNumberId = '';
+    if (env.agentDir) {
+      const { readFileSync, existsSync } = require('fs');
+      const { join } = require('path');
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const tokenMatch = content.match(/^WHATSAPP_ACCESS_TOKEN=(.+)$/m);
+        const phoneMatch = content.match(/^WHATSAPP_PHONE_NUMBER_ID=(.+)$/m);
+        if (tokenMatch && tokenMatch[1].trim()) accessToken = tokenMatch[1].trim();
+        if (phoneMatch && phoneMatch[1].trim()) phoneNumberId = phoneMatch[1].trim();
+      }
+    }
+    if (!accessToken) accessToken = process.env.WHATSAPP_ACCESS_TOKEN || '';
+    if (!phoneNumberId) phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
+
+    if (!accessToken || !phoneNumberId) {
+      const missing = [
+        !accessToken && 'WHATSAPP_ACCESS_TOKEN',
+        !phoneNumberId && 'WHATSAPP_PHONE_NUMBER_ID',
+      ].filter(Boolean).join(' and ');
+      console.error(
+        `Error: ${missing} not configured. ` +
+        `Set in agent .env or as environment variables. ` +
+        `See WHATSAPP_SETUP.md for the setup walkthrough.`,
+      );
+      process.exit(1);
+    }
+
+    let recipient: string;
+    try {
+      recipient = normalizeRecipientPhone(phone);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+
+    if (opts.template && !opts.lang) {
+      console.error('Error: --lang is required when --template is set (e.g. --lang en_US).');
+      process.exit(1);
+    }
+
+    const api = new WhatsAppAPI(accessToken, phoneNumberId);
+    try {
+      const result = opts.template
+        ? await api.sendTemplateMessage(recipient, opts.template, opts.lang!)
+        : await api.sendTextMessage(recipient, message);
+
+      const sentMessageId = result.messages?.[0]?.id ?? '';
+
+      // Log outbound + activity event so the dashboard sees every WhatsApp send,
+      // even from agents that never call log-event directly. Mirrors send-telegram.
+      if (env.agentName && env.ctxRoot) {
+        try {
+          const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+          const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
+          logEvent(paths, env.agentName, env.org, 'message', 'whatsapp_sent', 'info', JSON.stringify({
+            to: recipient,
+            wamid: sentMessageId,
+            template: opts.template ?? null,
+            preview,
+          }));
+        } catch { /* non-fatal */ }
+      }
+
+      console.log(`Message sent (wamid: ${sentMessageId || 'unknown'})`);
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);
