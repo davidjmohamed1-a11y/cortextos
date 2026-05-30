@@ -35,6 +35,7 @@ Every significant piece of work gets a task. See `.claude/skills/tasks/SKILL.md`
 2. **Start**: `cortextos bus update-task <id> in_progress`
 3. **Complete**: `cortextos bus complete-task <id> --result "[summary]"`
 4. **Log KPI**: `cortextos bus log-event action task_completed info --meta '{"task_id":"ID"}'`
+5. **If no tasks remain**: `cortextos bus update-heartbeat "idle — session ended"` — signals clean exit so sentinel and dashboard don't treat the silence as a stale anomaly.
 
 CONSEQUENCE: Tasks without creation = invisible on dashboard. Your effectiveness score will be 0%.
 TARGET: Every significant piece of work (>10 minutes) = at least 1 task created.

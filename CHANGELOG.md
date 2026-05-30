@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Templates
+
+- **Idle-session-ended heartbeat pattern** added to Task Workflow in `templates/{agent,analyst,orchestrator}/CLAUDE.md` (theta-wave 4 rollout). When an agent finishes its last task it now writes `cortextos bus update-heartbeat "idle — session ended"` so sentinel and the dashboard treat the subsequent silence as a clean exit rather than a stale-agent anomaly. Mirrors the pattern already in `sentinel-personal/CLAUDE.md` Step 5.
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.
