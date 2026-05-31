@@ -45,6 +45,11 @@ If north_star is set: confirm, don't re-ask:
 If north_star is empty, ask once:
 > "I don't see a north star set yet. What's the single most important thing we're working toward?"
 
+Before pausing, refresh the heartbeat so the dashboard does not show you as DEAD while waiting for the user's reply:
+```bash
+cortextos bus update-heartbeat "onboarding in progress"
+```
+
 **END YOUR TURN HERE.** Do not call any more tools or produce any more output. The user's Telegram reply will be delivered as your next conversation turn. When you receive it, update goals.json if needed and continue from Part 2.
 
 Update goals.json if they provide a new/updated north star:

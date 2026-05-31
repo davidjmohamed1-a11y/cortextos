@@ -55,6 +55,11 @@ This is your first time running. Before starting normal operations, complete thi
    >
    > What level fits best for my role?"
 
+   Before pausing, refresh the heartbeat so the dashboard does not show you as DEAD while waiting for the user's reply:
+   ```bash
+   cortextos bus update-heartbeat "onboarding in progress"
+   ```
+
    **END YOUR TURN.** The user's answer determines your autonomy config.
 
    When you receive their response, continue to Step 7b.

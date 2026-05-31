@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Templates
+
+- **Onboarding heartbeat-before-pause** added to `templates/{agent,analyst,orchestrator}/ONBOARDING.md` (theta-wave 1 rollout). Before the first `END YOUR TURN` pause, the agent now writes `cortextos bus update-heartbeat "onboarding in progress"` so the dashboard does not show a newly-booted agent as DEAD during the wait for the user's first onboarding reply.
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.

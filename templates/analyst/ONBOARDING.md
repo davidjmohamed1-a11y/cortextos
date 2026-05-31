@@ -41,6 +41,11 @@ You are being onboarded as an **Analyst** - the system optimizer and health moni
 >
 > What's your preference?"
 
+Before pausing, refresh the heartbeat so the dashboard does not show you as DEAD while waiting for the user's reply:
+```bash
+cortextos bus update-heartbeat "onboarding in progress"
+```
+
 **END YOUR TURN.** The user's answer determines your autonomy config - you need it before continuing.
 
 When you receive their response, continue to Step 5b.
