@@ -43,11 +43,25 @@ function writeAgentFile(agent: string, rel: string, body: string): string {
 }
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+  // Strip every CTX_* var the resolver looks at before re-pinning the two this
+  // test cares about. resolveEnv() cross-validates CTX_AGENT_DIR /
+  // CTX_PROJECT_ROOT against CTX_FRAMEWORK_ROOT — if the test inherits
+  // CTX_AGENT_DIR from a dev-loop shell while pinning CTX_FRAMEWORK_ROOT to
+  // a tmpdir, the resolver throws "sandbox/live environment leak" and the
+  // CLI exits before parsing its own args. Previously this suite silently
+  // depended on a clean caller environment.
+  const sanitized = { ...process.env };
+  for (const k of ['CTX_AGENT_DIR', 'CTX_PROJECT_ROOT', 'CTX_AGENT_NAME', 'CTX_ORG', 'CTX_INSTANCE_ID', 'CTX_FRAMEWORK_ROOT', 'CTX_ROOT']) {
+    delete sanitized[k];
+  }
+  sanitized.CTX_FRAMEWORK_ROOT = frameworkRoot;
+  sanitized.CTX_ROOT = frameworkRoot;
+
   try {
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [DIST_CLI, 'bus', 'upgrade-cron-teaching', ...args],
-      { env: { ...process.env, CTX_FRAMEWORK_ROOT: frameworkRoot, CTX_ROOT: frameworkRoot } },
+      { env: sanitized },
     );
     return { stdout, stderr, code: 0 };
   } catch (err) {

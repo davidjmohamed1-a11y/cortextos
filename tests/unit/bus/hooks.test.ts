@@ -60,20 +60,47 @@ function makeHook(overrides: Partial<HookEntry> = {}): HookEntry {
 }
 
 // Helper: read the meta JSON from the most recent execFile call.
+//
+// dispatchHook() has two execFile shapes — the primary one (used when
+// CTX_FRAMEWORK_ROOT is set, which beforeEach pins below) is:
+//   cmd  = process.execPath
+//   args = [cliPath, 'bus', 'log-event', 'action', <name>, 'info', '--meta', <json>]
+// The pre-fix fallback (no CTX_FRAMEWORK_ROOT) was:
+//   cmd  = 'cortextos'
+//   args = ['bus', 'log-event', 'action', <name>, 'info', '--meta', <json>]
+// Detect which one fired and pull <name> from the correct slot — earlier
+// versions of this helper hardcoded args[3] for the fallback shape, which
+// silently read the literal 'action' category once the primary path landed.
 function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | null {
   if (execFileCalls.length === 0) return null;
   const args = execFileCalls[execFileCalls.length - 1].args;
-  // shape: [bus, log-event, action, <name>, info, --meta, <json>]
-  const name = args[3];
+  const busIdx = args.indexOf('bus');
+  // shape after 'bus': [bus, log-event, action, <name>, info, --meta, <json>]
+  // → name is at busIdx + 3
+  const name = busIdx >= 0 ? args[busIdx + 3] : args[3];
   const metaIdx = args.indexOf('--meta');
   const meta = metaIdx >= 0 && metaIdx + 1 < args.length ? JSON.parse(args[metaIdx + 1]) : {};
   return { name, meta };
 }
 
 describe('src/bus/hooks — Day-2 per-handler wiring', () => {
+  // Pin CTX_FRAMEWORK_ROOT so dispatchHook deterministically takes its primary
+  // execFile path (node + cliPath). Without this the test result depends on
+  // the caller's shell — fine on a CI runner with no CTX_*, broken under any
+  // dev loop that exports them.
+  const ORIGINAL_FRAMEWORK_ROOT = process.env.CTX_FRAMEWORK_ROOT;
   beforeEach(() => {
     execFileCalls.length = 0;
     clearHandlerRegistry();
+    process.env.CTX_FRAMEWORK_ROOT = '/test/framework';
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_FRAMEWORK_ROOT === undefined) {
+      delete process.env.CTX_FRAMEWORK_ROOT;
+    } else {
+      process.env.CTX_FRAMEWORK_ROOT = ORIGINAL_FRAMEWORK_ROOT;
+    }
   });
 
   describe('loadHookRegistry', () => {

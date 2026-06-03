@@ -51,10 +51,21 @@ vi.mock('../../../src/daemon/ipc-server.js', () => {
 
 let tmpRoot: string;
 let frameworkRoot: string;
+// resolveEnv() reads seven CTX_* env vars and cross-validates them — notably
+// it throws if CTX_AGENT_DIR / CTX_PROJECT_ROOT aren't under CTX_FRAMEWORK_ROOT.
+// Before this list grew past four entries the suite would explode when run from
+// any shell that exported the agent vars (the cortextos dev loop does): the
+// previous beforeEach pinned CTX_FRAMEWORK_ROOT to a tmpdir but left
+// CTX_AGENT_DIR / CTX_PROJECT_ROOT pointing at the developer's live install,
+// which resolveEnv flagged as a "sandbox/live environment leak" and aborted.
+// Snapshot every var the resolver touches; beforeEach pins each one explicitly.
 const originalCtxRoot = process.env.CTX_ROOT;
 const originalFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
 const originalAgentName = process.env.CTX_AGENT_NAME;
 const originalInstanceId = process.env.CTX_INSTANCE_ID;
+const originalOrg = process.env.CTX_ORG;
+const originalProjectRoot = process.env.CTX_PROJECT_ROOT;
+const originalAgentDir = process.env.CTX_AGENT_DIR;
 
 /** The agent whose crons.json we write in the test setup */
 const TEST_AGENT = 'boris';
@@ -100,26 +111,34 @@ beforeEach(() => {
   // agentExistsInFramework() can find TEST_AGENT.
   frameworkRoot = mkdtempSync(join(tmpdir(), 'bus-crons-fw-'));
   mkdirSync(join(frameworkRoot, 'orgs', 'lifeos', 'agents', TEST_AGENT), { recursive: true });
+  const testAgentDir = join(frameworkRoot, 'orgs', 'lifeos', 'agents', TEST_AGENT);
 
   process.env.CTX_ROOT = tmpRoot;
   process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
   process.env.CTX_AGENT_NAME = TEST_AGENT;
   process.env.CTX_INSTANCE_ID = 'default';
+  // Pin the agent-scoped vars too so resolveEnv()'s "AGENT_DIR / PROJECT_ROOT
+  // must be under FRAMEWORK_ROOT" cross-check passes regardless of caller env.
+  // Without these three lines, any shell that exported the dev-loop CTX_*
+  // values poisoned every test in this file with a sandbox-leak abort.
+  process.env.CTX_ORG = 'lifeos';
+  process.env.CTX_PROJECT_ROOT = frameworkRoot;
+  process.env.CTX_AGENT_DIR = testAgentDir;
 });
 
 afterEach(() => {
-  // Restore env vars
-  if (originalCtxRoot !== undefined) process.env.CTX_ROOT = originalCtxRoot;
-  else delete process.env.CTX_ROOT;
-
-  if (originalFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = originalFrameworkRoot;
-  else delete process.env.CTX_FRAMEWORK_ROOT;
-
-  if (originalAgentName !== undefined) process.env.CTX_AGENT_NAME = originalAgentName;
-  else delete process.env.CTX_AGENT_NAME;
-
-  if (originalInstanceId !== undefined) process.env.CTX_INSTANCE_ID = originalInstanceId;
-  else delete process.env.CTX_INSTANCE_ID;
+  // Restore env vars — every var beforeEach touched, in lockstep.
+  const restore = (name: string, original: string | undefined): void => {
+    if (original !== undefined) process.env[name] = original;
+    else delete process.env[name];
+  };
+  restore('CTX_ROOT', originalCtxRoot);
+  restore('CTX_FRAMEWORK_ROOT', originalFrameworkRoot);
+  restore('CTX_AGENT_NAME', originalAgentName);
+  restore('CTX_INSTANCE_ID', originalInstanceId);
+  restore('CTX_ORG', originalOrg);
+  restore('CTX_PROJECT_ROOT', originalProjectRoot);
+  restore('CTX_AGENT_DIR', originalAgentDir);
 
   try { rmSync(tmpRoot, { recursive: true }); } catch { /* ignore */ }
   try { rmSync(frameworkRoot, { recursive: true }); } catch { /* ignore */ }
