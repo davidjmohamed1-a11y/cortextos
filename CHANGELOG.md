@@ -9,6 +9,10 @@
 - **Settings wiring**: agent / orchestrator / analyst templates and the security community agent now ship with the hook enabled by default in `.claude/settings.json` (PreToolUse, no matcher, 5s timeout).
 - **State**: `${CTX_ROOT}/state/<agent>/loop-detector.json`. Recoverable from corruption (bad JSON → empty state).
 
+### Templates
+
+- **Orchestrator silent-offline watchdog** added to `templates/analyst/HEARTBEAT.md` as Step 3e. During the user's waking hours (default 07–23 in `$CTX_TIMEZONE`), if `$CTX_ORCHESTRATOR_AGENT`'s heartbeat is stale >30 min, the analyst Telegrams the user directly. Tighter than the general >5h check in Step 3 — motivated by a personal-org outage where the orchestrator was silently offline for 9 hours overnight before anyone noticed. Uses three guards (orchestrator configured, not self, waking hours) so it's safe to enable by default across orgs and never alerts circularly. Mirrors a personal-org-local deployment already validated against real fleet behavior.
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.
