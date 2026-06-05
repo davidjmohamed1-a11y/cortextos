@@ -92,13 +92,40 @@ if [ -n "$CTX_ORCHESTRATOR_AGENT" ] \
       AGE_MIN=$(( (NOW_EPOCH - ORCH_EPOCH) / 60 ))
     fi
   fi
-  if [ "$AGE_MIN" -gt 30 ]; then
-    echo "WATCHDOG: $CTX_ORCHESTRATOR_AGENT heartbeat stale ${AGE_MIN}m — alerting user directly"
-    cortextos bus send-telegram "$CTX_TELEGRAM_CHAT_ID" \
-      "Watchdog: $CTX_ORCHESTRATOR_AGENT has been silent for ${AGE_MIN} min (threshold 30 min, waking hours). Last heartbeat: ${ORCH_TS:-missing}. May need a restart."
-    cortextos bus log-event action anomaly_detected warning \
-      --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"anomaly\":\"orchestrator_silent_offline\",\"watched\":\"$CTX_ORCHESTRATOR_AGENT\",\"age_min\":${AGE_MIN}}"
+  # Graduated threshold: right after a stale→fresh return, a normal morning
+  # gap can briefly cross 30m and cause a near-false-positive page. Use 90m
+  # for 90m post-return, then revert. State files live in /tmp because they
+  # only need to survive cycle-to-cycle, not across reboots — a reboot loses
+  # the grace window, which is acceptable (the next genuine outage still pages).
+  THRESHOLD=30
+  RETURNED_FILE="/tmp/${CTX_AGENT_NAME}_orch_returned"
+  PREV_AGE_FILE="/tmp/${CTX_AGENT_NAME}_orch_prev_age"
+  if [ -f "$RETURNED_FILE" ]; then
+    RETURNED_MTIME=$(stat -f %m "$RETURNED_FILE" 2>/dev/null \
+      || stat -c %Y "$RETURNED_FILE" 2>/dev/null || echo 0)
+    RETURNED_AGE_MIN=$(( ($(date -u +%s) - RETURNED_MTIME) / 60 ))
+    if [ "$RETURNED_AGE_MIN" -lt 90 ]; then
+      THRESHOLD=90
+    fi
   fi
+  if [ "$AGE_MIN" -gt "$THRESHOLD" ]; then
+    echo "WATCHDOG: $CTX_ORCHESTRATOR_AGENT heartbeat stale ${AGE_MIN}m (threshold ${THRESHOLD}m) — alerting user directly"
+    cortextos bus send-telegram "$CTX_TELEGRAM_CHAT_ID" \
+      "Watchdog: $CTX_ORCHESTRATOR_AGENT has been silent for ${AGE_MIN} min (threshold ${THRESHOLD} min, waking hours). Last heartbeat: ${ORCH_TS:-missing}. May need a restart."
+    cortextos bus log-event action anomaly_detected warning \
+      --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"anomaly\":\"orchestrator_silent_offline\",\"watched\":\"$CTX_ORCHESTRATOR_AGENT\",\"age_min\":${AGE_MIN},\"threshold_min\":${THRESHOLD}}"
+  fi
+  # Stale→fresh transition detection: if previous cycle saw the orchestrator
+  # stale (>30m) and this cycle sees them fresh (<30m), mark the return so
+  # the next cycle uses the graduated 90m threshold above. Single state file
+  # is enough — we compare the prior cycle's age, not maintain a separate flag.
+  PREV_AGE=0
+  [ -f "$PREV_AGE_FILE" ] && PREV_AGE=$(cat "$PREV_AGE_FILE" 2>/dev/null || echo 0)
+  if [ "$PREV_AGE" -gt 30 ] && [ "$AGE_MIN" -lt 30 ]; then
+    touch "$RETURNED_FILE"
+    echo "Watchdog: $CTX_ORCHESTRATOR_AGENT stale→fresh transition (prev ${PREV_AGE}m → now ${AGE_MIN}m) — 90m graduated threshold engaged."
+  fi
+  echo "$AGE_MIN" > "$PREV_AGE_FILE"
 fi
 ```
 
@@ -106,6 +133,8 @@ The three guards on the outer `if` matter:
 - `CTX_ORCHESTRATOR_AGENT` non-empty — skip silently when no orchestrator is configured (early-bootstrap orgs).
 - `!= CTX_AGENT_NAME` — never watch yourself; a stalled analyst can't catch its own stall, and the alert would be circular noise.
 - Waking-hours gate — quiet during the user's night so an overnight orchestrator pause does not buzz Telegram at 03:00.
+
+The graduated-threshold state files are namespaced with `$CTX_AGENT_NAME` so multiple analysts in different orgs sharing the same `/tmp` (rare but possible) don't clobber each other's prev-age tracking.
 
 ## Step 3b: Check own task queue + stale task detection
 
