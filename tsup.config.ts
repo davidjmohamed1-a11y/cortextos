@@ -13,6 +13,7 @@ export default defineConfig({
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
     'hooks/hook-loop-detector': 'src/hooks/hook-loop-detector.ts',
+    'hooks/hook-state-verify': 'src/hooks/hook-state-verify.ts',
   },
   format: ['cjs'],
   target: 'node20',

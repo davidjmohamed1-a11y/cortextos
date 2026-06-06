@@ -9,6 +9,13 @@
 - **Settings wiring**: agent / orchestrator / analyst templates and the security community agent now ship with the hook enabled by default in `.claude/settings.json` (PreToolUse, no matcher, 5s timeout).
 - **State**: `${CTX_ROOT}/state/<agent>/loop-detector.json`. Recoverable from corruption (bad JSON → empty state).
 
+### State-Verification Hook + Skill (Orchestrator)
+
+- **`hook-state-verify`**: new UserPromptSubmit hook. When the user's prompt contains keywords indicating verifiable external state (email / drafts / calendar / drive / tracker / "did" / "applied" / "submitted" / "follow-up" / etc.), the hook injects a system-reminder telling the orchestrator to invoke the `state-verification` skill before composing a response. Case-insensitive, word-boundary aware with optional trailing `s` so plurals match. Extras keywords loadable at runtime from `/tmp/.hook-state-verify-extras`. Fails open — a hook crash never blocks the user prompt.
+- **`state-verification` skill**: prescribes four parallel MCP queries (Gmail `search_threads in:sent newer_than:1d`, Gmail `list_drafts`, Drive `read_file_content` for sheet IDs in recent context, Calendar `list_events` next 7 days). Output is a STATE PREFETCH block at the top of the response. Optional one-line audit log to `${CTX_ROOT}/state/<agent>/state-snapshot.jsonl`. Lives at `templates/orchestrator/.claude/skills/state-verification/SKILL.md`.
+- **Settings wiring**: `templates/orchestrator/.claude/settings.json` now registers `hook-state-verify` under `UserPromptSubmit` with a 5s timeout. Future orchestrators inherit on scaffold.
+- **Motivation**: closes a recurring round-trip failure mode where the orchestrator recommended actions David had already taken or asked "did you do X" when X was verifiable in Gmail/Drive/Calendar. Soft discipline (Plan A — memory rule) failed under speed; this is Plan B — forcing function via the hook + prefetch via the skill.
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.

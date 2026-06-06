@@ -2455,6 +2455,11 @@ busCommand
   .description('PreToolUse hook: detects and blocks repeated tool loops (same-args repetition + ping-pong alternation)')
   .action(() => runHook('hook-loop-detector'));
 
+busCommand
+  .command('hook-state-verify')
+  .description('UserPromptSubmit hook: when David\'s prompt references verifiable external state (email/drive/calendar/tracker), inject a system-reminder telling the orchestrator to invoke the state-verification skill before responding')
+  .action(() => runHook('hook-state-verify'));
+
 // --- OAuth token rotation commands ---
 
 busCommand

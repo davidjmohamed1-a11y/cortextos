@@ -74,6 +74,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortextos bus hook-state-verify",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
