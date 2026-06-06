@@ -9,6 +9,15 @@
 - **Settings wiring**: agent / orchestrator / analyst templates and the security community agent now ship with the hook enabled by default in `.claude/settings.json` (PreToolUse, no matcher, 5s timeout).
 - **State**: `${CTX_ROOT}/state/<agent>/loop-detector.json`. Recoverable from corruption (bad JSON → empty state).
 
+### Google Sheets Bus Command (Native, Service-Account)
+
+- **`cortextos bus update-sheet`** — native Google Sheets API v4 wrapper. Three subcommands: `append <sheet> <range> <values-json>`, `set-cell <sheet> <a1> <value>`, `batch-update <sheet> <requests-json>` (or `-` for stdin). Mutations route through the agent's own Sheets client; no third-party MCP install required.
+- **Auth: service account, not user OAuth.** Cleanest security posture for this use case: David creates a Google Cloud service account, shares each sheet he wants forge to touch with the SA email, and the SA can only see/edit those sheets. No browser consent dance, no all-his-sheets blast radius.
+- **`src/google/sheets.ts`** — `GoogleSheetsAPI` class + `loadSheetsClientFromKeyPath` helper. RS256 JWT signing via `node:crypto`, OAuth2 JWT-bearer exchange (1h token, cached until 60s before expiry), built-in fetch, no external runtime deps.
+- **Env var: `GOOGLE_SHEETS_SA_KEY_PATH`** — agent `.env` first, then `process.env`. Same resolution pattern as send-telegram / send-whatsapp.
+- **Audit**: every operation emits a `action / sheet_updated` bus event with op, spreadsheet ID, range, and cell-update counts — full audit trail in the activity feed.
+- **`SHEETS_SETUP.md`** at repo root — plain-English David walkthrough for the one-time Google Cloud setup (project / API enable / SA / key download / per-sheet share / test).
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.
