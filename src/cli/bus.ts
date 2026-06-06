@@ -1022,6 +1022,148 @@ busCommand
     }
   });
 
+// ---------------------------------------------------------------------------
+// update-sheet — Google Sheets API v4 wrapper via service-account auth.
+// First-time setup: see SHEETS_SETUP.md (Google Cloud project → enable Sheets
+// API → service account → JSON key → share each sheet with the SA email).
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the path to David's service-account key file. Mirrors the env
+ * resolution pattern used by send-telegram / send-whatsapp: agent .env first
+ * (most-specific scope), then process.env. Returns null if neither has it set
+ * so the action can print a clear error rather than passing undefined down
+ * to readFileSync.
+ */
+function resolveSheetsKeyPath(): string | null {
+  const env = resolveEnv();
+  if (env.agentDir) {
+    const { readFileSync, existsSync } = require('fs');
+    const { join } = require('path');
+    const agentEnv = join(env.agentDir, '.env');
+    if (existsSync(agentEnv)) {
+      const match = readFileSync(agentEnv, 'utf-8').match(/^GOOGLE_SHEETS_SA_KEY_PATH=(.+)$/m);
+      if (match && match[1].trim()) return match[1].trim();
+    }
+  }
+  return process.env.GOOGLE_SHEETS_SA_KEY_PATH || null;
+}
+
+/**
+ * Emit a bus event for an update-sheet operation so every cell mutation is
+ * auditable post-hoc. Best-effort — a logging failure must never break the
+ * operation itself (the mutation already landed; missing log is a smaller harm
+ * than a duplicate write from a retry).
+ */
+function logSheetEvent(op: string, spreadsheetId: string, meta: Record<string, unknown>): void {
+  try {
+    const env = resolveEnv();
+    if (!env.agentName || !env.ctxRoot) return;
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    logEvent(paths, env.agentName, env.org, 'action', 'sheet_updated', 'info', JSON.stringify({
+      op, spreadsheet_id: spreadsheetId, ...meta,
+    }));
+  } catch { /* non-fatal */ }
+}
+
+const updateSheetCommand = busCommand
+  .command('update-sheet')
+  .description('Manipulate a Google Sheet via service-account auth. See SHEETS_SETUP.md for first-time setup. Three operations: append, set-cell, batch-update.');
+
+updateSheetCommand
+  .command('append')
+  .description('Append rows to a sheet range (values is JSON 2D array, outer=rows, inner=cells)')
+  .argument('<spreadsheet-id>', 'Spreadsheet ID (the long string in the sheet URL between /d/ and /edit)')
+  .argument('<range>', 'A1 range to append after, e.g. "Sheet1!A:D"')
+  .argument('<values-json>', 'JSON 2D array of values, e.g. \'[["a","b"],["c","d"]]\'')
+  .action(async (spreadsheetId: string, range: string, valuesJson: string) => {
+    const keyPath = resolveSheetsKeyPath();
+    if (!keyPath) {
+      console.error('Error: GOOGLE_SHEETS_SA_KEY_PATH not configured. Set it in your agent .env or as an env var. See SHEETS_SETUP.md.');
+      process.exit(1);
+    }
+    let values: unknown[][];
+    try {
+      values = JSON.parse(valuesJson);
+    } catch (err) {
+      console.error(`Error: <values-json> is not valid JSON: ${err instanceof Error ? err.message : String(err)}. Example: '[["cell1","cell2"],["cell3","cell4"]]'`);
+      process.exit(1);
+    }
+    const { loadSheetsClientFromKeyPath } = require('../google/sheets.js');
+    try {
+      const client = loadSheetsClientFromKeyPath(keyPath);
+      const result = await client.appendRows(spreadsheetId, range, values);
+      const updated = result.updates?.updatedCells ?? 0;
+      logSheetEvent('append', spreadsheetId, { range, rows: values.length, updated_cells: updated });
+      console.log(`Appended ${values.length} row(s) → updated range ${result.updates?.updatedRange ?? 'unknown'} (${updated} cells)`);
+    } catch (err: any) {
+      console.error(`Failed to append: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+updateSheetCommand
+  .command('set-cell')
+  .description('Set a single cell to a value')
+  .argument('<spreadsheet-id>', 'Spreadsheet ID')
+  .argument('<a1-notation>', 'Cell in A1 form, e.g. "Sheet1!B7" (quote sheet names with spaces)')
+  .argument('<value>', 'New cell value (string; numeric strings are entered as numbers via USER_ENTERED interpretation)')
+  .action(async (spreadsheetId: string, a1: string, value: string) => {
+    const keyPath = resolveSheetsKeyPath();
+    if (!keyPath) {
+      console.error('Error: GOOGLE_SHEETS_SA_KEY_PATH not configured. Set it in your agent .env or as an env var. See SHEETS_SETUP.md.');
+      process.exit(1);
+    }
+    const { loadSheetsClientFromKeyPath } = require('../google/sheets.js');
+    try {
+      const client = loadSheetsClientFromKeyPath(keyPath);
+      const result = await client.setCell(spreadsheetId, a1, value);
+      logSheetEvent('set_cell', spreadsheetId, { a1, updated_cells: result.updatedCells ?? 1 });
+      console.log(`Set ${a1} → ${result.updatedCells ?? 1} cell updated`);
+    } catch (err: any) {
+      console.error(`Failed to set cell: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+updateSheetCommand
+  .command('batch-update')
+  .description('Run a raw Sheets batchUpdate request (advanced — JSON is the requests array, NOT the full envelope)')
+  .argument('<spreadsheet-id>', 'Spreadsheet ID')
+  .argument('<requests-json>', 'JSON array of Google Sheets batchUpdate request objects. Pass "-" to read from stdin.')
+  .action(async (spreadsheetId: string, requestsJson: string) => {
+    const keyPath = resolveSheetsKeyPath();
+    if (!keyPath) {
+      console.error('Error: GOOGLE_SHEETS_SA_KEY_PATH not configured. Set it in your agent .env or as an env var. See SHEETS_SETUP.md.');
+      process.exit(1);
+    }
+    let raw = requestsJson;
+    if (requestsJson === '-') {
+      raw = readFileSync(0, 'utf-8');
+    }
+    let requests: unknown[];
+    try {
+      requests = JSON.parse(raw);
+    } catch (err) {
+      console.error(`Error: <requests-json> is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+    if (!Array.isArray(requests)) {
+      console.error('Error: <requests-json> must be a JSON ARRAY of request objects, not a single object. Wrap your single request in [].');
+      process.exit(1);
+    }
+    const { loadSheetsClientFromKeyPath } = require('../google/sheets.js');
+    try {
+      const client = loadSheetsClientFromKeyPath(keyPath);
+      const result = await client.batchUpdate(spreadsheetId, requests);
+      logSheetEvent('batch_update', spreadsheetId, { request_count: requests.length, reply_count: (result.replies ?? []).length });
+      console.log(`Batch update: ${requests.length} request(s) sent, ${(result.replies ?? []).length} reply object(s) returned`);
+    } catch (err: any) {
+      console.error(`Failed batch-update: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
 busCommand
   .command('react-telegram')
   .description("Set the bot's reaction on a Telegram message (single emoji ack)")
