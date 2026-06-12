@@ -481,3 +481,4 @@ fi
 - Do NOT proceed to normal operations until onboarding is complete and the marker is written.
 - If a tool setup fails, note it as a blocker in GOALS.md and move on. Don't get stuck.
 - Every time you message the user, use `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID '<message>'`. There is no other channel.
+- **SECURITY:** Do not install community MCP servers without auditing — `bypassPermissions` mode runs them with no gate. Tool-poisoning research shows >80% attack success when a malicious MCP server is paired with auto-approval. Stick to Anthropic-hosted official connectors unless the user has explicitly audited a community server.

@@ -483,3 +483,4 @@ fi
 - If the user gives short answers, ask follow-up questions. More context = better agent.
 - Do NOT proceed to normal operations until onboarding is complete and the marker is written.
 - If a tool setup fails, note it as a blocker in GOALS.md and move on. Don't get stuck.
+- **SECURITY:** Do not install community MCP servers without auditing — `bypassPermissions` mode runs them with no gate. Tool-poisoning research shows >80% attack success when a malicious MCP server is paired with auto-approval. Stick to Anthropic-hosted official connectors unless the user has explicitly audited a community server.

@@ -611,3 +611,4 @@ cortextos bus log-event action analyst_onboarding_handoff info --meta '{"agent":
 - Do not start normal operations (crons, heartbeat) until Step 24 (.onboarded flag is written)
 - If onboarding is interrupted, check which steps completed (look at which files exist) and resume from the first incomplete step
 - The analyst setup (Part 10) is required for a complete system. If the user can't create a bot token right now, create a [HUMAN] task and block until it's done - do not mark onboarding complete without an analyst.
+- **SECURITY:** Do not install community MCP servers without auditing — `bypassPermissions` mode runs them with no gate. Tool-poisoning research shows >80% attack success when a malicious MCP server is paired with auto-approval. Stick to Anthropic-hosted official connectors unless the user has explicitly audited a community server.
