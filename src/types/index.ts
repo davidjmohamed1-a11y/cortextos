@@ -174,6 +174,33 @@ export interface AgentConfig {
   dangerously_skip_permissions?: boolean;
   working_directory?: string;
   enabled?: boolean;
+  /**
+   * Per-agent Claude Code config-dir isolation.
+   *
+   * Controls the `CLAUDE_CONFIG_DIR` env var passed into the agent's PTY.
+   * - `'shared'` or absent: do not set CLAUDE_CONFIG_DIR; Claude Code defaults
+   *   to `~/.claude/` (legacy behaviour shared with the user and every other
+   *   non-isolated agent on this host).
+   * - `'isolated'`: use `<agentDir>/.claude-config/` (created on first spawn).
+   * - Any other string: use that literal path (escape hatch for custom layouts
+   *   — e.g. pointing several agents at one shared isolated dir on purpose).
+   *
+   * ISOLATES: settings.json, projects/, sessions/, history.jsonl,
+   * shell-snapshots/, skills/, plugins/, and the customApiKeyResponses.approved
+   * list (which gates the "use this API key?" interactive prompt that hangs an
+   * unattended PTY when ANTHROPIC_API_KEY is set alongside an existing OAuth
+   * login).
+   *
+   * DOES NOT ISOLATE: macOS Keychain OAuth credentials — the keychain entry is
+   * scoped per-user, not per-config-dir. State isolation only; for true
+   * auth/billing isolation an agent also needs its own ANTHROPIC_API_KEY (or
+   * CLAUDE_CODE_OAUTH_TOKEN) in .env. CLAUDE_CONFIG_DIR is necessary but not
+   * sufficient for billing isolation.
+   *
+   * New agents created via `cortextos add-agent` get `'isolated'` by default.
+   * Existing agents inherit `'shared'` (no flag) until the operator opts in.
+   */
+  claude_config_dir?: 'isolated' | 'shared' | string;
   crons?: CronEntry[];
   timezone?: string;
   day_mode_start?: string;

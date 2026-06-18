@@ -1,5 +1,6 @@
 import { join } from 'path';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, chmodSync, statSync } from 'fs';
+import { createHash } from 'crypto';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
@@ -107,6 +108,19 @@ export class AgentPTY {
         if (eqIdx > 0) {
           ptyEnv[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
         }
+      }
+    }
+
+    // Per-agent Claude Code config-dir isolation. Resolves the agent's
+    // `claude_config_dir` setting to an absolute path and prepares the dir
+    // on first spawn. Skipped silently when the agent .env already sets
+    // CLAUDE_CONFIG_DIR (.env wins). When config says 'shared' or is absent
+    // the env var is left unset and Claude Code uses ~/.claude (legacy).
+    if (!ptyEnv['CLAUDE_CONFIG_DIR']) {
+      const isolatedDir = this.resolveClaudeConfigDir();
+      if (isolatedDir) {
+        this.ensureConfigDirReady(isolatedDir, ptyEnv['ANTHROPIC_API_KEY']);
+        ptyEnv['CLAUDE_CONFIG_DIR'] = isolatedDir;
       }
     }
 
@@ -329,6 +343,89 @@ export class AgentPTY {
    */
   getOutputBuffer(): OutputBuffer {
     return this.outputBuffer;
+  }
+
+  /**
+   * Resolve the agent's `claude_config_dir` config setting to an absolute path.
+   *
+   * Returns null when no isolation is configured (legacy shared ~/.claude path).
+   * Returns an absolute path string when isolation IS configured. Callers must
+   * then pass the path through ensureConfigDirReady() before exporting it as
+   * CLAUDE_CONFIG_DIR so the dir exists and (if an API key is in play) the
+   * customApiKeyResponses approval is pre-populated to skip the interactive
+   * prompt that would otherwise hang the PTY.
+   *
+   * Resolution rules:
+   *   undefined | 'shared'  → null (no isolation, ~/.claude default)
+   *   'isolated'            → <agentDir>/.claude-config
+   *   '<any other string>'  → that literal path (escape hatch)
+   */
+  private resolveClaudeConfigDir(): string | null {
+    const setting = this.config.claude_config_dir;
+    if (!setting || setting === 'shared') return null;
+    if (setting === 'isolated') {
+      const agentDir = this.env.agentDir;
+      if (!agentDir) {
+        console.warn(`[agent-pty] ${this.env.agentName}: claude_config_dir='isolated' but agentDir is unset; falling back to shared ~/.claude`);
+        return null;
+      }
+      return join(agentDir, '.claude-config');
+    }
+    // Literal path escape hatch — trust the operator.
+    return setting;
+  }
+
+  /**
+   * Prepare an isolated CLAUDE_CONFIG_DIR before Claude Code spawns into it.
+   *
+   * - Creates the dir (mode 0700) if missing.
+   * - If `apiKey` is present AND no settings.json exists yet, writes a
+   *   settings.json (mode 0600) that pre-approves the API key's SHA-256 hash
+   *   in customApiKeyResponses.approved. This is what skips the "use this API
+   *   key?" interactive prompt that hangs an unattended PTY when
+   *   ANTHROPIC_API_KEY is set alongside an existing keychain OAuth login
+   *   (the prompt-hang failure mode observed during the Donna spawn).
+   * - If `apiKey` is absent, the dir is left empty after creation. Claude Code
+   *   falls back to keychain OAuth, which is per-user and resolves to David's
+   *   existing login regardless of CLAUDE_CONFIG_DIR (state isolation only,
+   *   not auth isolation).
+   *
+   * Failures are non-fatal: logged via console.warn and the dir export still
+   * proceeds. The downstream Claude Code spawn will surface any real auth
+   * problem in its own UI.
+   *
+   * Emits a startup logline so a config-shape regression in a future Claude
+   * Code release is spottable in stdout logs without manual inspection.
+   */
+  private ensureConfigDirReady(dir: string, apiKey: string | undefined): void {
+    try {
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+    } catch (err) {
+      console.warn(`[agent-pty] ${this.env.agentName}: failed to create CLAUDE_CONFIG_DIR ${dir}: ${(err as Error).message}`);
+      return;
+    }
+
+    const settingsPath = join(dir, 'settings.json');
+    if (apiKey && !existsSync(settingsPath)) {
+      try {
+        const hash = createHash('sha256').update(apiKey).digest('hex');
+        const settings = {
+          customApiKeyResponses: { approved: [hash], rejected: [] as string[] },
+        };
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        chmodSync(settingsPath, 0o600);
+      } catch (err) {
+        console.warn(`[agent-pty] ${this.env.agentName}: failed to pre-populate ${settingsPath}: ${(err as Error).message}`);
+      }
+    }
+
+    let settingsBytes = 0;
+    try {
+      if (existsSync(settingsPath)) settingsBytes = statSync(settingsPath).size;
+    } catch { /* ignore stat error */ }
+    console.log(`[agent-pty] ${this.env.agentName}: CLAUDE_CONFIG_DIR=${dir}, settings.json bytes=${settingsBytes}`);
   }
 
   /**
