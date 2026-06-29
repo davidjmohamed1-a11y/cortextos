@@ -82,6 +82,36 @@ Pure read-only — never writes to PTY, never sends prompts. Falls through grace
 
 Spec: `orgs/personal/agents/forge/specs/watchdog-liveness-probe-2026-06-29.md`.
 
+## Comms archive
+
+Durable structured archive of every agent message. Per-agent JSONL per month at:
+```
+<ctxRoot>/analytics/comms/<YYYY-MM>/<agent>.jsonl
+```
+
+Hot-paths wired in V1 (`src/bus/comms-archive.ts`):
+- `src/bus/message.ts sendMessage` → channel='agent_bus', direction='outbound' (sender perspective)
+- `src/bus/message.ts checkInbox` → channel='agent_bus', direction='inbound' (recipient perspective)
+- `src/cli/bus.ts send-telegram` → channel='telegram', direction='outbound'
+
+V1.5 deferred: inbound-telegram archive wire (formatTelegramTextMessage is a static method without agent context; deferred to a follow-up that threads context into the formatter or wraps it at the caller).
+
+Schema versioned (`COMMS_ARCHIVE_SCHEMA_VERSION = 1`); future non-additive changes bump the version and add a migration. Append is best-effort: archive failure never blocks the send-path; recoverable from downstream sources.
+
+**Operator CLI**:
+```bash
+cortextos bus comms-search [--agent X] [--channel telegram|agent_bus|bridge|cron|system] \
+                            [--direction inbound|outbound] [--query <substring>] \
+                            [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] \
+                            [--format json|text]
+```
+
+Unlocks: "what did kai draft for Nick Coffee last week" (--agent kai --query "Nick Coffee"), "all outbound telegram in the past week" (--direction outbound --channel telegram --from <date>), "any conversation about the NOTION_API_KEY" (--query "NOTION_API_KEY"), per-agent activity volume baseline.
+
+Boss's existing `archive-comms-daily` cron is superseded by the framework wire — boss can retire the cron at her convenience.
+
+Spec: `orgs/personal/agents/forge/specs/comms-archive-2026-06-29.md`.
+
 ## Per-agent Claude Code config isolation
 
 Each agent can have its own `CLAUDE_CONFIG_DIR` so its settings, sessions, projects history, and `customApiKeyResponses.approved` list are isolated from other agents on the same host. Controlled by `claude_config_dir` in the agent's `config.json`:

@@ -7,6 +7,7 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { acquireLock, releaseLock } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
+import { appendCommsArchive } from './comms-archive.js';
 
 // ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
@@ -84,6 +85,23 @@ export function sendMessage(
   ensureDir(inboxDir);
   atomicWriteSync(join(inboxDir, filename), JSON.stringify(message));
 
+  // C6: durable comms archive — outbound entry from the sender's perspective.
+  // The matching inbound entry is appended by checkInbox on the recipient's
+  // next read. Best-effort: archive failure never blocks the send.
+  appendCommsArchive({
+    ctxRoot: paths.ctxRoot,
+    agent: from,
+    direction: 'outbound',
+    channel: 'agent_bus',
+    sender: from,
+    recipient: to,
+    timestamp: message.timestamp,
+    text,
+    msg_id: msgId,
+    reply_to: replyTo || null,
+    metadata: { priority },
+  });
+
   return msgId;
 }
 
@@ -145,6 +163,22 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
         const destPath = join(inflight, file);
         renameSync(srcPath, destPath);
         messages.push(msg);
+
+        // C6: durable comms archive — inbound entry from recipient's perspective.
+        // Best-effort: archive failure never blocks delivery.
+        appendCommsArchive({
+          ctxRoot: paths.ctxRoot,
+          agent: msg.to,
+          direction: 'inbound',
+          channel: 'agent_bus',
+          sender: msg.from,
+          recipient: msg.to,
+          timestamp: msg.timestamp,
+          text: msg.text,
+          msg_id: msg.id,
+          reply_to: msg.reply_to,
+          metadata: { priority: msg.priority },
+        });
       } catch {
         // Move corrupt files to .errors/
         const errDir = join(inbox, '.errors');

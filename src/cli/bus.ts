@@ -1017,6 +1017,24 @@ busCommand
           const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
           logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
         } catch { /* non-fatal */ }
+        // C6: durable comms archive — outbound telegram from this agent's perspective.
+        try {
+          require('../bus/comms-archive.js').appendCommsArchive({
+            ctxRoot: env.ctxRoot,
+            agent: env.agentName,
+            direction: 'outbound',
+            channel: 'telegram',
+            sender: env.agentName,
+            recipient: chatId,
+            text: message,
+            msg_id: String(sentMessageId || ''),
+            metadata: {
+              ...(opts.image ? { image: opts.image } : {}),
+              ...(opts.file ? { file: opts.file } : {}),
+              parse_mode: opts.plainText ? 'none' : 'html',
+            },
+          });
+        } catch { /* non-fatal */ }
       }
 
       console.log('Message sent');
@@ -2468,6 +2486,50 @@ busCommand
 // C5: Liveness probe — manually run the watchdog's structured liveness check
 // for an agent. Looks at stdout-log mtime + heartbeat freshness + pid alive.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// C6: Comms archive search — grep + filter the per-agent monthly JSONL archive
+// ---------------------------------------------------------------------------
+
+busCommand
+  .command('comms-search')
+  .description('Search the framework comms archive (telegram + agent-bus + bridge + cron). Filters by agent / channel / direction / date range / substring query.')
+  .option('--agent <name>', 'Filter to one agent (perspective)')
+  .option('--channel <ch>', 'Filter to one channel (telegram, agent_bus, bridge, cron, system)')
+  .option('--direction <d>', 'Filter to one direction (inbound or outbound)')
+  .option('--query <q>', 'Substring match against message text (case-insensitive)')
+  .option('--from <date>', 'Inclusive lower bound (YYYY-MM-DD)')
+  .option('--to <date>', 'Inclusive upper bound (YYYY-MM-DD)')
+  .option('--limit <n>', 'Cap results (default: no cap)', (v) => parseInt(v, 10))
+  .option('--format <fmt>', 'Output format (json or text)', 'text')
+  .action((opts: { agent?: string; channel?: string; direction?: string; query?: string; from?: string; to?: string; limit?: number; format: string }) => {
+    const env = resolveEnv();
+    const { searchCommsArchive } = require('../bus/comms-archive.js');
+    const results = searchCommsArchive({
+      ctxRoot: env.ctxRoot,
+      agent: opts.agent,
+      channel: opts.channel as any,
+      direction: opts.direction as any,
+      query: opts.query,
+      from: opts.from,
+      to: opts.to,
+      limit: opts.limit,
+    });
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+    if (results.length === 0) {
+      console.log('(no results)');
+      return;
+    }
+    console.log(`${results.length} result(s):`);
+    for (const r of results) {
+      const arrow = r.direction === 'outbound' ? '→' : '←';
+      const text = r.text.length > 200 ? r.text.slice(0, 197) + '...' : r.text;
+      console.log(`[${r.timestamp}] ${r.channel} ${r.agent} ${arrow} ${r.recipient}: ${text.replace(/\n/g, ' ¶ ')}`);
+    }
+  });
 
 busCommand
   .command('probe-agent')
