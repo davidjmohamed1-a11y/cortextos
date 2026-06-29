@@ -26,6 +26,7 @@ import {
   type BridgeRequestType,
 } from '../bridge/index.js';
 import { generateBridgeKey, bridgeKeyPath, loadBridgeKey } from '../bridge/signing.js';
+import { loadDomainAllowlist, allowlistFilePath, V1_DEFAULT_DOMAIN_ALLOWLIST } from '../bridge/security.js';
 
 export function registerBridgeCommands(busCommand: Command): void {
   busCommand
@@ -42,6 +43,52 @@ export function registerBridgeCommands(busCommand: Command): void {
         console.error(String((err as Error).message ?? err));
         process.exit(1);
       }
+    });
+
+  busCommand
+    .command('bridge-allowlist')
+    .description('Manage the M1 bridge domain allowlist. Subcommands: list, add <domain>, remove <domain>')
+    .argument('<action>', 'list, add, or remove')
+    .argument('[domain]', 'Domain (required for add/remove)')
+    .action((action: string, domain: string | undefined) => {
+      const env = resolveEnv();
+      const fs = require('fs');
+      const path = allowlistFilePath(env.ctxRoot);
+      const current = Array.from(loadDomainAllowlist(env.ctxRoot));
+      if (action === 'list') {
+        console.log('Bridge domain allowlist (M1):');
+        for (const d of current) console.log(`  - ${d}`);
+        console.log(`(source: ${fs.existsSync(path) ? path : 'V1 defaults — write to ' + path + ' to override'})`);
+        return;
+      }
+      if (!domain) {
+        console.error(`Domain argument required for action '${action}'.`);
+        process.exit(1);
+      }
+      if (action === 'add') {
+        if (current.includes(domain)) {
+          console.log(`Domain '${domain}' already in allowlist; no change.`);
+          return;
+        }
+        current.push(domain);
+        const dir = require('path').dirname(path);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(path, JSON.stringify(current, null, 2));
+        console.log(`Added '${domain}'. Allowlist now: ${current.join(', ')}. Source: ${path}`);
+        return;
+      }
+      if (action === 'remove') {
+        const next = current.filter(d => d !== domain);
+        if (next.length === current.length) {
+          console.log(`Domain '${domain}' not in allowlist; no change.`);
+          return;
+        }
+        fs.writeFileSync(path, JSON.stringify(next, null, 2));
+        console.log(`Removed '${domain}'. Allowlist now: ${next.join(', ')}. Source: ${path}`);
+        return;
+      }
+      console.error(`Unknown action '${action}'. Use list, add, or remove.`);
+      process.exit(1);
     });
 
   busCommand

@@ -23,6 +23,7 @@ import {
   type BridgeResultDestination,
 } from './types.js';
 import { loadBridgeKey, signRequest, bridgeKeyPath } from './signing.js';
+import { isUrlAllowed, loadDomainAllowlist } from './security.js';
 
 export interface WriteBridgeRequestArgs {
   fromAgent: string;
@@ -104,6 +105,23 @@ export function composeBridgeRequest(args: WriteBridgeRequestArgs, signingKey?: 
  * Operator runs `cortextos bus generate-bridge-key` once at install time.
  */
 export function writeBridgeRequest(paths: BridgePaths, args: WriteBridgeRequestArgs, ctxRoot: string): string {
+  // M1: domain allowlist enforcement at queue-time. If context.url is set,
+  // it must resolve to an allowlisted hostname before we even sign + queue.
+  // The Cowork listener re-checks at execute time as defense-in-depth.
+  const ctxUrl = typeof args.context?.url === 'string' ? (args.context.url as string) : undefined;
+  if (ctxUrl) {
+    if (!isUrlAllowed(ctxUrl, ctxRoot)) {
+      const allowlist = loadDomainAllowlist(ctxRoot);
+      throw new Error(
+        `Bridge URL '${ctxUrl}' not in allowlist (M1 mitigation). ` +
+        `Allowed domains: ${allowlist.join(', ')}. ` +
+        `Operator can extend the allowlist via cortextos bus bridge-allowlist add <domain>; ` +
+        `David-set list at ${ctxRoot}/config/bridge-allowlist.json.`,
+      );
+    }
+  }
+
+  // M2: load signing key + sign. Throws if key missing.
   const key = loadBridgeKey(ctxRoot);
   if (!key) {
     throw new Error(
