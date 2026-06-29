@@ -2459,6 +2459,52 @@ busCommand
   .description('PreToolUse hook: detects and blocks repeated tool loops (same-args repetition + ping-pong alternation)')
   .action(() => runHook('hook-loop-detector'));
 
+busCommand
+  .command('hook-hard-rule-gate')
+  .description('PreToolUse hook: framework-level hard-rule enforcement (git push to main, rm outside workspace, gmail send w/o approval, public post). Spec: forge/specs/hard-rule-enforcement-hooks-2026-06-29.md')
+  .action(() => runHook('hook-hard-rule-gate'));
+
+// ---------------------------------------------------------------------------
+// Hard-rule approval token grant — used to unblock a hook-hard-rule-gate denial.
+// Operator (boss-personal or David) runs this AFTER explicit out-of-band
+// confirmation that the gated action should proceed.
+// ---------------------------------------------------------------------------
+
+busCommand
+  .command('approve-hard-rule')
+  .description('Grant a one-shot approval token to unblock the next hard-rule-gated action of the given rule. Token expires after 5 min if not consumed.')
+  .argument('<rule-name>', 'Rule name (e.g. git_push_main, rm_outside_workspace, gmail_send_without_approval, public_post)')
+  .option('--reason <reason>', 'Human-readable reason for the approval (logged for audit)')
+  .action((ruleName: string, opts: { reason?: string }) => {
+    const env = resolveEnv();
+    const tokensDir = join(env.ctxRoot, 'approvals', 'granted', ruleName);
+    require('fs').mkdirSync(tokensDir, { recursive: true, mode: 0o700 });
+    const tokenId = `${Date.now()}-${require('crypto').randomBytes(3).toString('hex')}`;
+    const tokenPath = join(tokensDir, `${tokenId}.json`);
+    const payload = {
+      rule: ruleName,
+      granted_by: env.agentName,
+      granted_at: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
+      reason: opts.reason || '(none)',
+    };
+    require('fs').writeFileSync(tokenPath, JSON.stringify(payload, null, 2));
+    try {
+      require('fs').chmodSync(tokenPath, 0o600);
+    } catch { /* non-fatal */ }
+    try {
+      logEvent(
+        resolvePaths(env.agentName, env.instanceId, env.org),
+        env.agentName,
+        env.org,
+        'action',
+        'hard_rule_approval_granted',
+        'info',
+        JSON.stringify({ rule: ruleName, token_id: tokenId, reason: opts.reason || '(none)' }),
+      );
+    } catch { /* non-fatal */ }
+    console.log(tokenPath);
+  });
+
 // --- OAuth token rotation commands ---
 
 busCommand
