@@ -64,6 +64,24 @@ Writes a token at `<ctxRoot>/approvals/granted/<rule-name>/<id>.json`. The next 
 
 Spec source of truth: `orgs/personal/agents/forge/specs/hard-rule-enforcement-hooks-2026-06-29.md`.
 
+## Liveness probe
+
+The existing 50-min watchdog in `src/daemon/fast-checker.ts` writes `[watchdog] <agent> alive` to the heartbeat regardless of whether the PTY is responsive. This was the gap that hid Oracle's 14h OAuth-wall hang on 2026-06-19 — process alive ≠ progress.
+
+The C5 liveness probe (`src/daemon/liveness-probe.ts`) pairs the watchdog's bookkeeping signal with a real progress signal: stdout-log mtime + heartbeat.json freshness + pid liveness check. Result is written to `<ctxRoot>/state/<agent>/liveness.json` (separate from `heartbeat.json` which agents own + rewrite wholesale).
+
+**Levels**: `healthy`, `stale_stdout`, `stale_heartbeat`, `wedged`, `dead`, `unknown`. Thresholds: stdout >30 min stale + heartbeat >6h stale + pid alive = `wedged`.
+
+**Operator CLI**:
+```bash
+cortextos bus probe-agent <name> [--format json|text]
+```
+Pure read-only — never writes to PTY, never sends prompts. Falls through gracefully when the daemon is down (pid_alive returns null).
+
+**Probe runs automatically** every 50 min via the watchdog timer. Wedged/dead states are also logged to the daemon's stdout for immediate operator visibility.
+
+Spec: `orgs/personal/agents/forge/specs/watchdog-liveness-probe-2026-06-29.md`.
+
 ## Per-agent Claude Code config isolation
 
 Each agent can have its own `CLAUDE_CONFIG_DIR` so its settings, sessions, projects history, and `customApiKeyResponses.approved` list are isolated from other agents on the same host. Controlled by `claude_config_dir` in the agent's `config.json`:

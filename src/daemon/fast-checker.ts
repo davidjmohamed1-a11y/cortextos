@@ -7,6 +7,7 @@ import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } f
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
+import { probeAgentLiveness, writeLivenessResult } from './liveness-probe.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
@@ -106,14 +107,34 @@ export class FastChecker {
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
 
-    // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
+    // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state.
+    // Also runs the C5 liveness probe and writes the structured result to
+    // <ctxRoot>/state/<agent>/liveness.json so sentinel + dashboards can see a
+    // framework-side progress signal (not just the agent's self-report).
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
+    // Resolve ctxRoot from CTX_ROOT env (set by daemon at start) or fall back
+    // to deriving from agentDir (...orgs/<org>/agents/<agent>/ → strip).
+    const ctxRoot = process.env.CTX_ROOT || this.agent.getAgentDir().split('/orgs/')[0] || '';
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
       execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
         if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
       });
+      // C5: framework liveness probe (best-effort; failure never blocks watchdog)
+      try {
+        const result = probeAgentLiveness({
+          agentName,
+          ctxRoot,
+          ptyPid: this.agent.getStatus()?.pid ?? null,
+        });
+        writeLivenessResult({ agentName, ctxRoot }, result);
+        if (result.level === 'wedged' || result.level === 'dead') {
+          this.log(`[liveness] ${agentName} level=${result.level}: ${result.reason}`);
+        }
+      } catch (err) {
+        this.log(`Liveness probe error (non-fatal): ${(err as Error).message}`);
+      }
     }, HEARTBEAT_INTERVAL_MS);
 
     while (this.running) {

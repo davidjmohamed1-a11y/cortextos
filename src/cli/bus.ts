@@ -2465,6 +2465,48 @@ busCommand
   .action(() => runHook('hook-hard-rule-gate'));
 
 // ---------------------------------------------------------------------------
+// C5: Liveness probe — manually run the watchdog's structured liveness check
+// for an agent. Looks at stdout-log mtime + heartbeat freshness + pid alive.
+// ---------------------------------------------------------------------------
+
+busCommand
+  .command('probe-agent')
+  .description('Run the C5 framework liveness probe for an agent. Reports stdout/heartbeat/pid freshness as a structured LivenessResult. Pure read-only (no PTY writes, no conversation pollution).')
+  .argument('<name>', 'Agent name')
+  .option('--format <fmt>', 'Output format (json or text)', 'text')
+  .action(async (name: string, opts: { format: string }) => {
+    const env = resolveEnv();
+    // Try to fetch the pid from the live daemon. If daemon is down or the
+    // agent isn't listed, fall through with pid=null (probe still works on
+    // the stdout/heartbeat signals alone — just no pid_alive info).
+    let pid: number | null = null;
+    try {
+      const ipc = new IPCClient(env.instanceId);
+      if (await ipc.isDaemonRunning()) {
+        const response = await ipc.send({ type: 'status', source: 'cortextos bus probe-agent' });
+        if (response.success && Array.isArray(response.data)) {
+          const found = (response.data as Array<{ name: string; pid?: number }>).find(s => s.name === name);
+          if (found?.pid) pid = found.pid;
+        }
+      }
+    } catch { /* daemon unreachable — proceed without pid */ }
+
+    const { probeAgentLiveness } = require('../daemon/liveness-probe.js');
+    const result = probeAgentLiveness({ agentName: name, ctxRoot: env.ctxRoot, ptyPid: pid });
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`agent: ${name}`);
+    console.log(`level: ${result.level}`);
+    console.log(`reason: ${result.reason}`);
+    console.log(`stdout_age: ${result.stdout_age_ms === null ? 'n/a' : Math.round(result.stdout_age_ms / 60000) + ' min'}`);
+    console.log(`heartbeat_age: ${result.heartbeat_age_ms === null ? 'n/a' : Math.round(result.heartbeat_age_ms / 60000) + ' min'}`);
+    console.log(`pid_alive: ${result.pid_alive === null ? 'unknown (daemon not reachable or agent not listed)' : String(result.pid_alive)}`);
+    console.log(`probed_at: ${result.probed_at}`);
+  });
+
+// ---------------------------------------------------------------------------
 // Hard-rule approval token grant — used to unblock a hook-hard-rule-gate denial.
 // Operator (boss-personal or David) runs this AFTER explicit out-of-band
 // confirmation that the gated action should proceed.
