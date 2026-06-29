@@ -1,12 +1,14 @@
 /**
  * Bridge — Outbound (cortextOS → Cowork)
  *
- * Composes a BridgeRequest, validates against the V1 allowlist, atomically
- * writes the JSON to the pending/ dir, returns the request id.
+ * Composes a BridgeRequest, validates against the V1 allowlist, signs it
+ * (M2 mitigation: HMAC over canonical payload), atomically writes the JSON
+ * to the pending/ dir, returns the request id.
  *
  * The pending/ file is what Cowork's scheduled session reads on its next
- * cycle. Cowork moves the file through in-progress/ → completed/ or failed/
- * depending on outcome.
+ * cycle. Cowork verifies the signature BEFORE executing (per the M2 mitigation
+ * pattern documented in the David-install doc); fails-the-verify go to failed/.
+ * Cowork moves verified requests through in-progress/ → completed/ or failed/.
  */
 
 import { join } from 'path';
@@ -20,6 +22,7 @@ import {
   type BridgeRequestType,
   type BridgeResultDestination,
 } from './types.js';
+import { loadBridgeKey, signRequest, bridgeKeyPath } from './signing.js';
 
 export interface WriteBridgeRequestArgs {
   fromAgent: string;
@@ -30,8 +33,12 @@ export interface WriteBridgeRequestArgs {
 }
 
 /**
- * Build a BridgeRequest without writing it. Pure function — useful for tests
- * and the upcoming `bridge-request --dry-run` CLI mode.
+ * Build a BridgeRequest without writing it. Pure function — no fs.
+ *
+ * `signingKey` is optional: if provided, the returned request includes a
+ * `sig` field (HMAC over the canonical payload). If omitted, no sig is set
+ * (tests can call compose without a key). PRODUCTION callers (writeBridgeRequest,
+ * CLI) load the key and pass it through.
  *
  * Throws on:
  * - invalid fromAgent (must match /^[a-z0-9_-]+$/)
@@ -40,7 +47,7 @@ export interface WriteBridgeRequestArgs {
  * - resultDestination.type other than 'agent_inbox' (V1 only supports inbox)
  * - resultDestination.agent missing when type='agent_inbox'
  */
-export function composeBridgeRequest(args: WriteBridgeRequestArgs): BridgeRequest {
+export function composeBridgeRequest(args: WriteBridgeRequestArgs, signingKey?: string): BridgeRequest {
   validateAgentName(args.fromAgent);
 
   if (!V1_ALLOWED_REQUEST_TYPES.includes(args.requestType)) {
@@ -72,7 +79,7 @@ export function composeBridgeRequest(args: WriteBridgeRequestArgs): BridgeReques
   validateAgentName(args.resultDestination.agent);
 
   const id = `bridge-${Date.now()}-${args.fromAgent}-${randomBytes(3).toString('hex')}`;
-  return {
+  const req: BridgeRequest = {
     id,
     from_agent: args.fromAgent,
     created_at: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
@@ -80,19 +87,32 @@ export function composeBridgeRequest(args: WriteBridgeRequestArgs): BridgeReques
     description: args.description,
     context: args.context,
     result_destination: args.resultDestination,
-    // sig field reserved — V1 ships unsigned (Cowork has no signing key);
-    // the cortextOS-side relay watcher signs the inbox notification it
-    // constructs from the response, so the trust boundary is at the relay
-    // point not at the OneDrive payload.
   };
+
+  if (signingKey) {
+    req.sig = signRequest(req, signingKey);
+  }
+
+  return req;
 }
 
 /**
- * Queue a bridge request: compose + atomic write to pending/.
- * Returns the new request id; caller uses it with getBridgeStatus to poll.
+ * Queue a bridge request: load signing key from ctxRoot, compose + sign,
+ * atomic write to pending/. Returns the new request id.
+ *
+ * Throws when the bridge signing key file is missing — M2 hard requirement.
+ * Operator runs `cortextos bus generate-bridge-key` once at install time.
  */
-export function writeBridgeRequest(paths: BridgePaths, args: WriteBridgeRequestArgs): string {
-  const request = composeBridgeRequest(args);
+export function writeBridgeRequest(paths: BridgePaths, args: WriteBridgeRequestArgs, ctxRoot: string): string {
+  const key = loadBridgeKey(ctxRoot);
+  if (!key) {
+    throw new Error(
+      `Bridge signing key not provisioned at ${bridgeKeyPath(ctxRoot)}. ` +
+      `Run \`cortextos bus generate-bridge-key\` once at install time (the operator runs this on the Mini; David never sees a terminal). ` +
+      `Bridge requests cannot be queued without a key — M2 security mitigation.`,
+    );
+  }
+  const request = composeBridgeRequest(args, key);
   ensureDir(paths.outbound);
   const filename = `${request.id}.json`;
   atomicWriteSync(join(paths.outbound, filename), JSON.stringify(request, null, 2));

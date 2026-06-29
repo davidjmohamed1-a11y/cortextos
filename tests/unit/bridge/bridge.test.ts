@@ -106,9 +106,29 @@ describe('bridge/outbound — composeBridgeRequest validation', () => {
 });
 
 describe('bridge/outbound — writeBridgeRequest', () => {
-  it('writes the request file atomically to pending/<id>.json', () => {
+  it('throws if signing key is missing (M2 hard requirement)', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'bridge-out-'));
     try {
+      const paths = resolveBridgePaths('/ignored', tmp);
+      // No signing key provisioned in tmp/config/ → must throw
+      expect(() => writeBridgeRequest(paths, {
+        fromAgent: 'forge',
+        requestType: 'settings_audit',
+        description: 'Smoke test',
+        context: {},
+        resultDestination: { type: 'agent_inbox', agent: 'forge' },
+      }, tmp)).toThrow(/Bridge signing key not provisioned/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a signed request when key is present (M2)', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'bridge-out-'));
+    try {
+      const { generateBridgeKey } = await import('../../../src/bridge/signing.js');
+      generateBridgeKey(tmp); // creates <tmp>/config/bridge-signing-key
+
       const paths = resolveBridgePaths('/ignored', tmp);
       const id = writeBridgeRequest(paths, {
         fromAgent: 'forge',
@@ -116,12 +136,13 @@ describe('bridge/outbound — writeBridgeRequest', () => {
         description: 'Smoke test',
         context: {},
         resultDestination: { type: 'agent_inbox', agent: 'forge' },
-      });
+      }, tmp);
       const filePath = join(paths.outbound, `${id}.json`);
       expect(existsSync(filePath)).toBe(true);
       const parsed = JSON.parse(readReal(filePath));
       expect(parsed.id).toBe(id);
       expect(parsed.from_agent).toBe('forge');
+      expect(parsed.sig).toMatch(/^[a-f0-9]{64}$/); // HMAC-SHA256 hex
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -25,8 +25,40 @@ import {
   V1_ALLOWED_REQUEST_TYPES,
   type BridgeRequestType,
 } from '../bridge/index.js';
+import { generateBridgeKey, bridgeKeyPath, loadBridgeKey } from '../bridge/signing.js';
 
 export function registerBridgeCommands(busCommand: Command): void {
+  busCommand
+    .command('generate-bridge-key')
+    .description('Generate the bridge HMAC signing key at <ctxRoot>/config/bridge-signing-key (mode 0600). Run ONCE at install time. Refuses to overwrite an existing key without --force (rotation invalidates in-flight bridge requests + requires Cowork listener restart).')
+    .option('--force', 'Overwrite an existing key (rotation). Will invalidate in-flight bridge requests + require Cowork listener restart to pick up the new key.', false)
+    .action((opts: { force: boolean }) => {
+      const env = resolveEnv();
+      try {
+        const path = generateBridgeKey(env.ctxRoot, opts.force);
+        console.log(`Bridge signing key written to ${path} (mode 0600).`);
+        console.log(opts.force ? 'ROTATED — restart Cowork listener so it picks up the new key.' : 'INITIAL — Cowork listener picks up this key on next read.');
+      } catch (err) {
+        console.error(String((err as Error).message ?? err));
+        process.exit(1);
+      }
+    });
+
+  busCommand
+    .command('bridge-key-status')
+    .description('Check whether the bridge signing key is provisioned. Pure read-only; never echoes the key value.')
+    .action(() => {
+      const env = resolveEnv();
+      const path = bridgeKeyPath(env.ctxRoot);
+      const key = loadBridgeKey(env.ctxRoot);
+      if (key) {
+        console.log(`Bridge signing key present at ${path} (${key.length} chars). Bridge requests can be queued.`);
+      } else {
+        console.log(`Bridge signing key NOT FOUND at ${path}. Run \`cortextos bus generate-bridge-key\` to provision.`);
+        process.exit(1);
+      }
+    });
+
   busCommand
     .command('bridge-request')
     .description('Queue a task for the agent↔Cowork bridge. Cowork picks up on next scheduled run.')
@@ -56,7 +88,7 @@ export function registerBridgeCommands(busCommand: Command): void {
             agent: opts.to,
             ...(opts.expectedBy ? { expected_by: opts.expectedBy } : {}),
           },
-        });
+        }, env.ctxRoot);
         console.log(id);
       } catch (err) {
         console.error(String((err as Error).message ?? err));
