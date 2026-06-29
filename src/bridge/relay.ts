@@ -19,12 +19,18 @@
  * catch up on the next run.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, renameSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { sendMessage } from '../bus/message.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import type { BusPaths, Priority } from '../types/index.js';
 import type { BridgePaths, BridgeRequest, BridgeResponseMetadata } from './types.js';
+import {
+  isSensitiveResponse,
+  loadSensitiveDomains,
+  pendingApprovalSidecarPath,
+  checkApprovalDecision,
+} from './sensitivity.js';
 
 const RELAY_STATE_FILENAME = 'bridge-relay-state.json';
 const RELAY_STATE_VERSION = 1;
@@ -117,6 +123,12 @@ export interface RelayTickResult {
   relayed: number;
   skipped_malformed: number;
   skipped_already_relayed: number;
+  /** Newly gated this tick (sidecar written, Telegram alert fired to David). */
+  newly_pending_approval: number;
+  /** Still gated this tick (sidecar already existed; awaiting David). */
+  still_pending_approval: number;
+  /** Rejected by David this tick (response moved to rejected/, requester notified). */
+  rejected: number;
   failures: Array<{ id: string; reason: string }>;
 }
 
@@ -124,22 +136,42 @@ export interface RelayTickResult {
  * One relay tick. Idempotent: re-running sees previously-relayed ids in
  * state and skips them.
  *
+ * M3 (sensitive-relay gate) integrated:
+ *   - Before sendMessage, classify response sensitivity.
+ *   - If sensitive AND no approval token: write sidecar to completed/,
+ *     send David an approval-prompt Telegram via boss-personal, count as
+ *     newly_pending_approval. Next tick re-checks for approval token.
+ *   - If sensitive AND approval token present: consume token + proceed.
+ *   - If sensitive AND reject marker present: move response to failed/
+ *     with a rejection record, send brief "rejected by David" inbox
+ *     notification to the requesting agent.
+ *
  * @param bridgePaths resolved bridge paths (default: OneDrive cowork-tasks/)
  * @param busPaths cortextOS bus paths (needed for sendMessage signing key + inbox dir)
  * @param stateDir directory where relay-state.json lives (typically <ctxRoot>/state/atlas/)
+ * @param ctxRoot cortextOS root (needed for M3 approval-token + sensitive-domain config lookup)
  */
 export function relayTick(
   bridgePaths: BridgePaths,
   busPaths: BusPaths,
   stateDir: string,
+  ctxRoot?: string,
 ): RelayTickResult {
   const result: RelayTickResult = {
     scanned: 0,
     relayed: 0,
     skipped_malformed: 0,
     skipped_already_relayed: 0,
+    newly_pending_approval: 0,
+    still_pending_approval: 0,
+    rejected: 0,
     failures: [],
   };
+
+  // M3 config — derive ctxRoot from busPaths.ctxRoot when caller hasn't passed
+  // explicitly (back-compat with the V1 relay API).
+  const effectiveCtxRoot = ctxRoot ?? busPaths.ctxRoot;
+  const sensitiveDomains = loadSensitiveDomains(effectiveCtxRoot);
 
   if (!existsSync(bridgePaths.processed)) {
     // OneDrive completed/ dir doesn't exist yet — Cowork hasn't run, nothing to relay.
@@ -193,6 +225,91 @@ export function relayTick(
       continue;
     }
 
+    // M3: classify sensitivity + check approval state before relaying.
+    const sensitivity = isSensitiveResponse(parsed.request, parsed.response, sensitiveDomains);
+    if (sensitivity.sensitive) {
+      const decision = checkApprovalDecision(effectiveCtxRoot, parsed.request.id);
+      if (decision.status === 'pending') {
+        const sidecar = pendingApprovalSidecarPath(bridgePaths.processed, parsed.request.id);
+        if (!existsSync(sidecar)) {
+          // First time we've seen this sensitive response — write sidecar +
+          // send David an approval-prompt Telegram via boss-personal inbox.
+          try {
+            ensureDir(bridgePaths.processed);
+            atomicWriteSync(sidecar, JSON.stringify({
+              request_id: parsed.request.id,
+              from_agent: parsed.request.from_agent,
+              recipient_agent: targetAgent,
+              sensitivity_reason: sensitivity.reason,
+              detected_at: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
+              description: parsed.request.description,
+              request_context: parsed.request.context,
+              response_status: parsed.response.status,
+              ...(parsed.response.error ? { response_error: parsed.response.error } : {}),
+            }, null, 2));
+            // Notify boss-personal so she can surface to David via Telegram.
+            try {
+              sendMessage(
+                busPaths,
+                'cowork-bridge',
+                'boss-personal',
+                'high',
+                `Bridge response pending David approval (M3 gate fired).\n\n` +
+                `Request: ${parsed.request.id}\n` +
+                `From agent: ${parsed.request.from_agent}\n` +
+                `For agent: ${targetAgent}\n` +
+                `Description: ${parsed.request.description}\n` +
+                `Sensitivity: ${sensitivity.reason}\n\n` +
+                `David's choice:\n` +
+                `  - approve: \`cortextos bus bridge-approve-relay ${parsed.request.id}\`\n` +
+                `  - reject:  \`cortextos bus bridge-reject-relay ${parsed.request.id} --reason "<why>"\``,
+                parsed.request.id,
+              );
+            } catch { /* notification best-effort */ }
+            result.newly_pending_approval++;
+          } catch (err) {
+            result.failures.push({ id: parsed.request.id, reason: `M3 sidecar write failed: ${(err as Error).message}` });
+          }
+        } else {
+          result.still_pending_approval++;
+        }
+        // Sensitive + pending OR newly-pending → do NOT relay this tick.
+        continue;
+      }
+      if (decision.status === 'rejected') {
+        // Move response to failed/ + send brief rejection inbox to the requester.
+        try {
+          const failedPath = join(bridgePaths.failed, file);
+          ensureDir(bridgePaths.failed);
+          renameSync(fullPath, failedPath);
+          // Clean up sidecar if present.
+          const sidecar = pendingApprovalSidecarPath(bridgePaths.processed, parsed.request.id);
+          if (existsSync(sidecar)) try { unlinkSync(sidecar); } catch { /* ignore */ }
+          // Notify requesting agent (brief — body of the response stays in failed/).
+          try {
+            sendMessage(
+              busPaths,
+              'cowork-bridge',
+              targetAgent,
+              'normal',
+              `Bridge response REJECTED by David (M3 gate).\n\n` +
+              `Request: ${parsed.request.id}\n` +
+              `Description: ${parsed.request.description}\n` +
+              `Rejection reason: ${decision.reason}\n\n` +
+              `The full response payload is in: ${failedPath} (left for audit).`,
+              parsed.request.id,
+            );
+          } catch { /* notification best-effort */ }
+          seen.add(parsed.request.id);
+          result.rejected++;
+        } catch (err) {
+          result.failures.push({ id: parsed.request.id, reason: `M3 reject move failed: ${(err as Error).message}` });
+        }
+        continue;
+      }
+      // decision.status === 'approved' — fall through to normal relay below.
+    }
+
     try {
       const text = buildNotificationText(parsed, fullPath);
       sendMessage(
@@ -204,6 +321,13 @@ export function relayTick(
         // reply_to: link back to the bridge request id so agents can correlate
         parsed.request.id,
       );
+      // M3: clean up sidecar + consume approval token if present.
+      const sidecar = pendingApprovalSidecarPath(bridgePaths.processed, parsed.request.id);
+      if (existsSync(sidecar)) try { unlinkSync(sidecar); } catch { /* ignore */ }
+      if (sensitivity.sensitive) {
+        const decision = checkApprovalDecision(effectiveCtxRoot, parsed.request.id);
+        if (decision.tokenPath) try { unlinkSync(decision.tokenPath); } catch { /* ignore */ }
+      }
       seen.add(parsed.request.id);
       result.relayed++;
     } catch (err) {

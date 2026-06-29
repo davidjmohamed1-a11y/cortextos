@@ -27,6 +27,14 @@ import {
 } from '../bridge/index.js';
 import { generateBridgeKey, bridgeKeyPath, loadBridgeKey } from '../bridge/signing.js';
 import { loadDomainAllowlist, allowlistFilePath, V1_DEFAULT_DOMAIN_ALLOWLIST } from '../bridge/security.js';
+import {
+  approvalTokenPath,
+  rejectMarkerPath,
+  pendingApprovalSidecarPath,
+  loadSensitiveDomains,
+  V1_DEFAULT_SENSITIVE_DOMAINS,
+  sensitiveDomainsFilePath,
+} from '../bridge/sensitivity.js';
 
 export function registerBridgeCommands(busCommand: Command): void {
   busCommand
@@ -85,6 +93,124 @@ export function registerBridgeCommands(busCommand: Command): void {
         }
         fs.writeFileSync(path, JSON.stringify(next, null, 2));
         console.log(`Removed '${domain}'. Allowlist now: ${next.join(', ')}. Source: ${path}`);
+        return;
+      }
+      console.error(`Unknown action '${action}'. Use list, add, or remove.`);
+      process.exit(1);
+    });
+
+  busCommand
+    .command('bridge-approve-relay')
+    .description('M3: grant David approval for a sensitive bridge response so the next relay tick delivers it to the requesting agent. Writes a one-shot token that the relay consumes on next tick.')
+    .argument('<request-id>', 'Bridge request id (e.g. bridge-1750000000-boss-personal-abc123)')
+    .option('--reason <reason>', 'Optional reason logged in the approval token + activity feed')
+    .action((requestId: string, opts: { reason?: string }) => {
+      const env = resolveEnv();
+      const fs = require('fs');
+      const p = approvalTokenPath(env.ctxRoot, requestId);
+      const dir = require('path').dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(p, JSON.stringify({
+        request_id: requestId,
+        approved_by: env.agentName,
+        approved_at: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
+        reason: opts.reason || '(none)',
+      }, null, 2));
+      try { fs.chmodSync(p, 0o600); } catch { /* best-effort */ }
+      console.log(`Approval token written to ${p}. Next relay tick will deliver the response.`);
+    });
+
+  busCommand
+    .command('bridge-reject-relay')
+    .description('M3: reject a sensitive bridge response. Relay moves the response to failed/, sends a brief rejection notification to the requesting agent.')
+    .argument('<request-id>', 'Bridge request id')
+    .requiredOption('--reason <reason>', 'Reason for rejection (logged + included in the requester-side notification)')
+    .action((requestId: string, opts: { reason: string }) => {
+      const env = resolveEnv();
+      const fs = require('fs');
+      const p = rejectMarkerPath(env.ctxRoot, requestId);
+      const dir = require('path').dirname(p);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(p, JSON.stringify({
+        request_id: requestId,
+        rejected_by: env.agentName,
+        rejected_at: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
+        reason: opts.reason,
+      }, null, 2));
+      try { fs.chmodSync(p, 0o600); } catch { /* best-effort */ }
+      console.log(`Reject marker written to ${p}. Next relay tick will move the response to failed/.`);
+    });
+
+  busCommand
+    .command('bridge-pending-approvals')
+    .description('M3: list bridge responses waiting on David approval (sidecar files in completed/).')
+    .action(() => {
+      const env = resolveEnv();
+      const bridgePaths = resolveBridgePaths(env.ctxRoot);
+      const fs = require('fs');
+      if (!fs.existsSync(bridgePaths.processed)) {
+        console.log('No pending approvals (completed/ dir does not exist yet).');
+        return;
+      }
+      const sidecars = fs.readdirSync(bridgePaths.processed).filter((f: string) => f.endsWith('.pending-approval.json'));
+      if (sidecars.length === 0) {
+        console.log('No pending approvals.');
+        return;
+      }
+      console.log(`${sidecars.length} pending approval(s):`);
+      for (const file of sidecars) {
+        try {
+          const data = JSON.parse(fs.readFileSync(require('path').join(bridgePaths.processed, file), 'utf-8'));
+          console.log(`  - ${data.request_id} (${data.from_agent} → ${data.recipient_agent}) detected ${data.detected_at}`);
+          console.log(`    reason: ${data.sensitivity_reason}`);
+          console.log(`    description: ${data.description}`);
+          console.log(`    approve: cortextos bus bridge-approve-relay ${data.request_id}`);
+          console.log(`    reject:  cortextos bus bridge-reject-relay ${data.request_id} --reason "<why>"`);
+          console.log('');
+        } catch { /* skip malformed sidecar */ }
+      }
+    });
+
+  busCommand
+    .command('bridge-sensitive-domains')
+    .description('M3: manage the sensitive-domain list. Subcommands: list, add <domain>, remove <domain>')
+    .argument('<action>', 'list, add, or remove')
+    .argument('[domain]', 'Domain (required for add/remove)')
+    .action((action: string, domain: string | undefined) => {
+      const env = resolveEnv();
+      const fs = require('fs');
+      const path = sensitiveDomainsFilePath(env.ctxRoot);
+      const current = Array.from(loadSensitiveDomains(env.ctxRoot));
+      if (action === 'list') {
+        console.log('Bridge sensitive domains (M3 — responses from these gate for David approval before relay):');
+        for (const d of current) console.log(`  - ${d}`);
+        console.log(`(source: ${fs.existsSync(path) ? path : 'V1 defaults — write to ' + path + ' to override'})`);
+        return;
+      }
+      if (!domain) {
+        console.error(`Domain argument required for action '${action}'.`);
+        process.exit(1);
+      }
+      if (action === 'add') {
+        if (current.includes(domain)) {
+          console.log(`Domain '${domain}' already in sensitive list; no change.`);
+          return;
+        }
+        current.push(domain);
+        const dir = require('path').dirname(path);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(path, JSON.stringify(current, null, 2));
+        console.log(`Added '${domain}'. Sensitive list now: ${current.join(', ')}.`);
+        return;
+      }
+      if (action === 'remove') {
+        const next = current.filter(d => d !== domain);
+        if (next.length === current.length) {
+          console.log(`Domain '${domain}' not in sensitive list; no change.`);
+          return;
+        }
+        fs.writeFileSync(path, JSON.stringify(next, null, 2));
+        console.log(`Removed '${domain}'. Sensitive list now: ${next.join(', ')}.`);
         return;
       }
       console.error(`Unknown action '${action}'. Use list, add, or remove.`);

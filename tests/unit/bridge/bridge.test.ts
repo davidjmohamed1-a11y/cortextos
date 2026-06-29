@@ -366,7 +366,7 @@ describe('bridge/relay — relayTick', () => {
     }
   });
 
-  it('routes failed-status responses at high priority', () => {
+  it('M3: failed-status responses gate for David approval (newly_pending_approval, NOT relayed on first tick)', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'bridge-relay-fail-'));
     try {
       const bridgePaths = resolveBridgePaths('/ignored', join(tmp, 'cowork-tasks'));
@@ -393,9 +393,23 @@ describe('bridge/relay — relayTick', () => {
         },
       }));
       const r = relayTick(bridgePaths, busPaths, join(ctxRoot, 'state', 'atlas'));
-      expect(r.relayed).toBe(1);
-      const inboxFile = readdirSync(busPaths.inbox)[0];
-      expect(inboxFile).toMatch(/^1-/); // priority 1 = high
+      // M3 gates failed-status responses for David approval — first tick does
+      // NOT deliver to requester's inbox; instead writes a sidecar + notifies
+      // boss-personal with approve/reject commands.
+      expect(r.relayed).toBe(0);
+      expect(r.newly_pending_approval).toBe(1);
+      // Sidecar file should now exist alongside the response
+      const sidecar = join(bridgePaths.processed, `${requestId}.pending-approval.json`);
+      const fsLocal = require('fs');
+      expect(fsLocal.existsSync(sidecar)).toBe(true);
+      // boss-personal should have received the approval-prompt message (high priority)
+      const bossInbox = join(ctxRoot, 'inbox', 'boss-personal');
+      if (fsLocal.existsSync(bossInbox)) {
+        const bossFiles = readdirSync(bossInbox);
+        expect(bossFiles.length).toBeGreaterThan(0);
+        // Priority 1 = high (boss's approval prompt)
+        expect(bossFiles[0]).toMatch(/^1-/);
+      }
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
