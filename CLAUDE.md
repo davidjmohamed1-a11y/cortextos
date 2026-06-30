@@ -153,6 +153,55 @@ Site-policy cache lives fleet-wide at `<ctxRoot>/state/fetch-ladder/site-policy/
 Design source: `orgs/personal/reference/fetch-ladder-design-2026-06-30.md` (legal grounding: Van Buren 2021, hiQ, Meta v Bright Data).
 Spec: `orgs/personal/agents/forge/specs/fetch-ladder-2026-06-30.md`.
 
+## Two-way Claude bridge (Phase A — inbound channel)
+
+The Cowork bridge was originally fleet-initiated only (the fleet sends Claude a request → Claude does the work → result comes back). Phase A adds the **inbound channel** so Claude can also INITIATE messages/requests/challenges TO the fleet, tier-gated.
+
+**Directories on the OneDrive bridge root** (`~/Library/CloudStorage/OneDrive-Personal/cowork-tasks/`):
+- `from-claude/pending/` — Claude writes new InboundMessage JSON here. Sole writer: Claude desktop side.
+- `from-claude/pending-approval/` — sensitive messages held for David. Sole writer: inbound-relay.
+- `from-claude/processed/` — delivered messages. Sole writer: inbound-relay (move-on-relay).
+- `from-claude/blocked/` — signature-failed / hard-rule-blocked / rejected. Sole writer: inbound-relay.
+- `relayed/` — outbound responses successfully delivered to a fleet inbox. Move-on-relay archive. Sole writer: outbound relay.
+
+**InboundMessage schema** (Claude side writes):
+```typescript
+{
+  schema_version: 1,
+  id: 'inbound-<unix-ms>-claude-<rand5>',
+  from: 'claude',
+  to_agent: 'boss-personal' | 'atlas' | 'donna' | 'kai' | 'forge' | ...,
+  kind: 'message' | 'challenge' | 'fact' | 'request',
+  priority: 'urgent' | 'high' | 'normal' | 'low',
+  text: '...',
+  context?: { url?, command?, ... },   // kind-specific
+  sensitive_hint?: boolean,             // self-declared; conservative default if absent
+  created_at: '<ISO-8601>',
+  sig: '<HMAC-SHA256 hex>',             // signing key shared with the fleet via bridge-signing-key
+}
+```
+
+**Tier-gating rules**:
+- `kind === 'message' | 'challenge' | 'fact'` → CONTENT, bypasses hard-rules + sensitivity default (red-team dissent must flow freely). Routine delivery.
+- `kind === 'request'` → run through hard-rules (any match = block to `from-claude/blocked/`, V1 has no inbound override path) AND sensitivity classifier (request to kai = always sensitive; URL hits a sensitive domain = sensitive; no `sensitive_hint` = conservative default sensitive).
+- Sensitive → sidecar in `pending-approval/` + boss-personal notified for David one-tap approval. Operator runs `cortextos bus bridge-approve-relay <id>` or `bridge-reject-relay <id>`.
+
+**Operator CLI**:
+```bash
+cortextos bus bridge-inbound-tick [--format json|text] [--max-per-tick N]
+cortextos bus bridge-inbound-list [pending|pending-approval|processed|blocked]
+cortextos bus bridge-inbound-dry-run <file>
+```
+
+**Scheduled execution**: atlas runs `bridge-inbound-tick` every 5 min (cron `bridge-inbound-relay`), mirroring the outbound `bridge-relay`. Both ticks acquire an advisory file-lock on their state file — operator-initiated CLI runs and the daemon scheduler cannot collide.
+
+**Idempotency model (move-on-relay)**: after `sendMessage` succeeds, the relay atomically renames the source file out of `pending/` (inbound) or `completed/` (outbound) into `processed/` or `relayed/` respectively. **The FS layout itself is the dedup primitive** — state file is a fast-skip cache only. Even if the state file is lost or a tick crashes mid-flight, redelivery is impossible: the FS shows the move already happened. This closes the redelivery edge case that surfaced during M3 testing.
+
+**One-writer-per-channel-state**: every bridge state file + every dir has a single declared writer (see spec table). Enforced by advisory file-lock on the relay state files. The Cowork↔executor race that drove the (d) local-executor pivot cannot recur by design.
+
+Spec: `orgs/personal/agents/forge/specs/claude-fleet-phase-a-2026-06-30.md`.
+Design source: `orgs/personal/reference/claude-fleet-integration-design-2026-06-30.md`.
+
 ## Per-agent Claude Code config isolation
 
 Each agent can have its own `CLAUDE_CONFIG_DIR` so its settings, sessions, projects history, and `customApiKeyResponses.approved` list are isolated from other agents on the same host. Controlled by `claude_config_dir` in the agent's `config.json`:

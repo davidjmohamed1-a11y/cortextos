@@ -5,13 +5,29 @@ import { join } from 'path';
 
 import {
   canonicalSignPayload,
+  canonicalInboundSignPayload,
   bridgeKeyPath,
   loadBridgeKey,
   generateBridgeKey,
   signRequest,
   verifyRequest,
+  signInboundMessage,
+  verifyInboundMessage,
 } from '../../../src/bridge/signing.js';
-import type { BridgeRequest } from '../../../src/bridge/types.js';
+import type { BridgeRequest, InboundMessage } from '../../../src/bridge/types.js';
+
+const sampleInbound = (overrides: Partial<InboundMessage> = {}): InboundMessage => ({
+  schema_version: 1,
+  id: 'inbound-12345-claude-xyz',
+  from: 'claude',
+  to_agent: 'forge',
+  kind: 'message',
+  priority: 'normal',
+  text: 'hello',
+  created_at: '2026-06-30T07:00:00.000Z',
+  sig: '',
+  ...overrides,
+});
 
 const sampleRequest = (overrides: Partial<BridgeRequest> = {}): BridgeRequest => ({
   id: 'bridge-12345-forge-abcdef',
@@ -193,5 +209,73 @@ describe('signing — signRequest + verifyRequest', () => {
     const req = sampleRequest();
     req.sig = 'short';
     expect(verifyRequest(req, key)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inbound message signing — Phase A
+// ---------------------------------------------------------------------------
+
+describe('canonicalInboundSignPayload', () => {
+  it('is deterministic for the same input', () => {
+    const a = canonicalInboundSignPayload(sampleInbound());
+    const b = canonicalInboundSignPayload(sampleInbound());
+    expect(a).toBe(b);
+  });
+
+  it('changes when text changes', () => {
+    const a = canonicalInboundSignPayload(sampleInbound({ text: 'one' }));
+    const b = canonicalInboundSignPayload(sampleInbound({ text: 'two' }));
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when kind changes', () => {
+    const a = canonicalInboundSignPayload(sampleInbound({ kind: 'message' }));
+    const b = canonicalInboundSignPayload(sampleInbound({ kind: 'challenge' }));
+    expect(a).not.toBe(b);
+  });
+
+  it('changes when context changes', () => {
+    const a = canonicalInboundSignPayload(sampleInbound({ context: { url: 'a' } }));
+    const b = canonicalInboundSignPayload(sampleInbound({ context: { url: 'b' } }));
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('signInboundMessage / verifyInboundMessage', () => {
+  const key = 'test-key';
+
+  it('signs + verifies round-trip', () => {
+    const m = sampleInbound();
+    m.sig = signInboundMessage(m, key);
+    expect(verifyInboundMessage(m, key)).toBe(true);
+  });
+
+  it('rejects when text is tampered', () => {
+    const m = sampleInbound({ text: 'original' });
+    m.sig = signInboundMessage(m, key);
+    m.text = 'tampered';
+    expect(verifyInboundMessage(m, key)).toBe(false);
+  });
+
+  it('rejects with wrong key', () => {
+    const m = sampleInbound();
+    m.sig = signInboundMessage(m, key);
+    expect(verifyInboundMessage(m, 'wrong-key')).toBe(false);
+  });
+
+  it('rejects missing sig', () => {
+    const m = sampleInbound({ sig: '' });
+    expect(verifyInboundMessage(m, key)).toBe(false);
+  });
+
+  it('rejects malformed sig (non-hex)', () => {
+    const m = sampleInbound({ sig: 'not-hex-at-all!!!' });
+    expect(verifyInboundMessage(m, key)).toBe(false);
+  });
+
+  it('rejects wrong-length sig', () => {
+    const m = sampleInbound({ sig: 'ab12' });
+    expect(verifyInboundMessage(m, key)).toBe(false);
   });
 });

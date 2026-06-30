@@ -19,9 +19,11 @@ export type {
   BridgeStatus,
   BridgePaths,
   BridgeConfig,
+  InboundMessage,
+  InboundMessageKind,
 } from './types.js';
 
-export { V1_ALLOWED_REQUEST_TYPES } from './types.js';
+export { V1_ALLOWED_REQUEST_TYPES, V1_INBOUND_KINDS } from './types.js';
 
 export { DEFAULT_BRIDGE_ROOT, resolveBridgePaths } from './paths.js';
 
@@ -40,3 +42,9 @@ export {
 export { sweepBridge, type JanitorSweepResult } from './janitor.js';
 
 export { relayTick, type RelayTickResult } from './relay.js';
+
+export {
+  inboundRelayTick,
+  type InboundRelayTickResult,
+  type InboundRelayTickArgs,
+} from './inbound-relay.js';

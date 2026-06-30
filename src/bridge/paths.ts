@@ -49,11 +49,18 @@ export const DEFAULT_BRIDGE_ROOT = join(
  */
 export function resolveBridgePaths(_ctxRoot: string, rootOverride?: string): BridgePaths {
   const root = rootOverride || DEFAULT_BRIDGE_ROOT;
+  const fromClaude = join(root, 'from-claude');
   return {
     root,
     outbound: join(root, 'pending'),
     processing: join(root, 'in-progress'),
     processed: join(root, 'completed'),
     failed: join(root, 'failed'),
+    relayed: join(root, 'relayed'),
+    from_claude_root: fromClaude,
+    from_claude_pending: join(fromClaude, 'pending'),
+    from_claude_pending_approval: join(fromClaude, 'pending-approval'),
+    from_claude_processed: join(fromClaude, 'processed'),
+    from_claude_blocked: join(fromClaude, 'blocked'),
   };
 }

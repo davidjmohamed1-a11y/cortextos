@@ -25,6 +25,8 @@ import {
   V1_ALLOWED_REQUEST_TYPES,
   type BridgeRequestType,
 } from '../bridge/index.js';
+import { inboundRelayTick } from '../bridge/inbound-relay.js';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { generateBridgeKey, bridgeKeyPath, loadBridgeKey } from '../bridge/signing.js';
 import { loadDomainAllowlist, allowlistFilePath, V1_DEFAULT_DOMAIN_ALLOWLIST } from '../bridge/security.js';
 import {
@@ -355,5 +357,121 @@ export function registerBridgeCommands(busCommand: Command): void {
       for (const e of result.errors) {
         console.log(`  ERR ${e.file}: ${e.reason}`);
       }
+    });
+
+  // ---------- Phase A: inbound bridge commands ---------------------------
+
+  busCommand
+    .command('bridge-inbound-tick')
+    .description('Run one inbound-relay tick: scan from-claude/pending/, verify signatures, classify, deliver routine OR gate sensitive. Idempotent. One-writer-locked.')
+    .option('--format <fmt>', 'json | text (default text)', 'text')
+    .option('--max-per-tick <n>', 'Override max files processed per tick (default 50)', (v) => parseInt(v, 10))
+    .action((opts: { format: string; maxPerTick?: number }) => {
+      const env = resolveEnv();
+      const bridgePaths = resolveBridgePaths(env.ctxRoot);
+      const busPaths = resolvePaths(env.agentName, env.instanceId, env.org);
+      const stateDir = join(env.ctxRoot, 'state', env.agentName);
+      const result = inboundRelayTick({
+        bridgePaths, busPaths, stateDir,
+        ctxRoot: env.ctxRoot,
+        maxPerTick: opts.maxPerTick,
+      });
+      if (opts.format === 'json') {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(
+        `Inbound bridge tick: scanned=${result.scanned} delivered=${result.delivered} ` +
+        `pending_approval(new=${result.newly_pending_approval}/still=${result.still_pending_approval}) ` +
+        `approved_delivered=${result.approved_and_delivered} rejected=${result.rejected} ` +
+        `hard_rule_blocked=${result.hard_rule_blocked} signature_failed=${result.signature_failed} ` +
+        `parse_failed=${result.parse_failed} deferred=${result.deferred_rate_limit} ` +
+        `failures=${result.failures.length}`,
+      );
+      for (const f of result.failures) {
+        console.log(`  FAIL ${f.id}: ${f.reason}`);
+      }
+    });
+
+  busCommand
+    .command('bridge-inbound-list')
+    .description('List inbound message files in a from-claude/ subdir.')
+    .argument('[state]', 'pending | pending-approval | processed | blocked (default pending)', 'pending')
+    .option('--format <fmt>', 'json | text', 'text')
+    .action((state: string, opts: { format: string }) => {
+      const env = resolveEnv();
+      const bridgePaths = resolveBridgePaths(env.ctxRoot);
+      const dirMap: Record<string, string> = {
+        'pending': bridgePaths.from_claude_pending,
+        'pending-approval': bridgePaths.from_claude_pending_approval,
+        'processed': bridgePaths.from_claude_processed,
+        'blocked': bridgePaths.from_claude_blocked,
+      };
+      const dir = dirMap[state];
+      if (!dir) {
+        console.error(`Unknown state '${state}'. Use: pending | pending-approval | processed | blocked`);
+        process.exit(2);
+      }
+      if (!existsSync(dir)) {
+        if (opts.format === 'json') console.log('[]');
+        else console.log(`(no entries — directory does not exist yet)`);
+        return;
+      }
+      const files = readdirSync(dir)
+        .filter((f) => f.endsWith('.json') && !f.endsWith('.pending-approval.json'))
+        .sort();
+      if (opts.format === 'json') {
+        const entries = files.map((f) => {
+          try {
+            return { file: f, content: JSON.parse(readFileSync(join(dir, f), 'utf-8')) };
+          } catch {
+            return { file: f, content: null, error: 'parse failed' };
+          }
+        });
+        console.log(JSON.stringify(entries, null, 2));
+        return;
+      }
+      if (files.length === 0) {
+        console.log(`(no entries in from-claude/${state}/)`);
+        return;
+      }
+      console.log(`${files.length} entr${files.length === 1 ? 'y' : 'ies'} in from-claude/${state}/:`);
+      for (const f of files) {
+        try {
+          const m = JSON.parse(readFileSync(join(dir, f), 'utf-8'));
+          console.log(`  ${m.id || f}  kind=${m.kind ?? '?'}  to=${m.to_agent ?? '?'}  ${(m.text ?? '').slice(0, 80)}`);
+        } catch {
+          console.log(`  ${f}  (unparseable)`);
+        }
+      }
+    });
+
+  busCommand
+    .command('bridge-inbound-dry-run')
+    .description('Classify-only preview of an inbound message file (no delivery, no movement).')
+    .argument('<file>', 'Path to an InboundMessage JSON file')
+    .action((file: string) => {
+      if (!existsSync(file)) {
+        console.error(`File not found: ${file}`);
+        process.exit(2);
+      }
+      let parsed: any;
+      try {
+        parsed = JSON.parse(readFileSync(file, 'utf-8'));
+      } catch (err) {
+        console.error(`Parse failed: ${(err as Error).message}`);
+        process.exit(2);
+      }
+      console.log(`InboundMessage dry-run:`);
+      console.log(`  id:               ${parsed.id}`);
+      console.log(`  from:             ${parsed.from}`);
+      console.log(`  to_agent:         ${parsed.to_agent}`);
+      console.log(`  kind:             ${parsed.kind}`);
+      console.log(`  priority:         ${parsed.priority}`);
+      console.log(`  sensitive_hint:   ${parsed.sensitive_hint === undefined ? '(unset → conservative default)' : parsed.sensitive_hint}`);
+      console.log(`  sig present:      ${typeof parsed.sig === 'string' && parsed.sig.length > 0}`);
+      console.log(`  text preview:     ${(parsed.text ?? '').slice(0, 120)}`);
+      console.log(`  context:          ${JSON.stringify(parsed.context ?? {})}`);
+      console.log(`(Note: actual signature verification + tier classification runs at relay-tick time, against the host's bridge signing key.)`);
     });
 }

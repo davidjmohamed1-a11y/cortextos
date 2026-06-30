@@ -353,14 +353,18 @@ describe('bridge/relay — relayTick', () => {
       expect(msg.text).toContain(requestId);
       expect(msg.text).toContain('Check Notion settings');
 
-      // Second tick: idempotent, should skip
+      // Second tick: idempotent — Phase A move-on-relay archives the file
+      // out of completed/ into relayed/, so the second tick simply scans zero.
+      // The FS layout itself is the dedup primitive.
       const second = relayTick(bridgePaths, busPaths, stateDir);
-      expect(second.scanned).toBe(1);
+      expect(second.scanned).toBe(0);
       expect(second.relayed).toBe(0);
-      expect(second.skipped_already_relayed).toBe(1);
 
       // Inbox still only has one file
       expect(readdirSync(busPaths.inbox)).toHaveLength(1);
+      // File now lives in relayed/ (FS-authoritative dedup)
+      expect(readdirSync(bridgePaths.relayed)).toHaveLength(1);
+      expect(readdirSync(bridgePaths.processed)).toHaveLength(0);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

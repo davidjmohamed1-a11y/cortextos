@@ -22,7 +22,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
-import type { BridgeRequest } from './types.js';
+import type { BridgeRequest, InboundMessage } from './types.js';
 
 /**
  * Canonical serialization for the payload that gets signed. Order MUST be
@@ -124,6 +124,60 @@ export function verifyRequest(req: BridgeRequest, key: string): boolean {
   try {
     expected = Buffer.from(signRequest(req, key), 'hex');
     provided = Buffer.from(req.sig, 'hex');
+  } catch {
+    return false;
+  }
+  if (expected.length !== provided.length) return false;
+  try {
+    return timingSafeEqual(expected, provided);
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inbound message signing — Phase A (2026-06-30)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical serialization for an InboundMessage. Independent from
+ * canonicalSignPayload (BridgeRequest) — different fields, different consumer.
+ * Re-uses the same key file (one secret for both directions = same trust
+ * scope; both parties = cortextOS + Claude).
+ */
+export function canonicalInboundSignPayload(
+  msg: Pick<InboundMessage, 'id' | 'from' | 'to_agent' | 'kind' | 'priority' | 'text' | 'context' | 'created_at'>,
+): string {
+  return [
+    msg.id,
+    msg.from,
+    msg.to_agent,
+    msg.kind,
+    msg.priority,
+    msg.text,
+    JSON.stringify(msg.context ?? null),
+    msg.created_at,
+  ].join(':');
+}
+
+export function signInboundMessage(
+  msg: Pick<InboundMessage, 'id' | 'from' | 'to_agent' | 'kind' | 'priority' | 'text' | 'context' | 'created_at'>,
+  key: string,
+): string {
+  return createHmac('sha256', key).update(canonicalInboundSignPayload(msg)).digest('hex');
+}
+
+/**
+ * Verify an InboundMessage's signature. Constant-time comparison. Never
+ * throws — caller branches on the boolean.
+ */
+export function verifyInboundMessage(msg: InboundMessage, key: string): boolean {
+  if (!msg.sig || typeof msg.sig !== 'string') return false;
+  let expected: Buffer;
+  let provided: Buffer;
+  try {
+    expected = Buffer.from(signInboundMessage(msg, key), 'hex');
+    provided = Buffer.from(msg.sig, 'hex');
   } catch {
     return false;
   }

@@ -183,6 +183,10 @@ export interface BridgeResponseMetadata {
 /**
  * Resolved paths for the bridge module. Computed at runtime — default points
  * to OneDrive cowork-tasks/ per atlas's spec; rootOverride supported for tests.
+ *
+ * V2 (Phase A two-way build, 2026-06-30): added `relayed/` (post-delivery
+ * archive, FS-authoritative dedup) + `from_claude_*` (inbound channel:
+ * Claude initiates messages to the fleet).
  */
 export interface BridgePaths {
   /** Root for all bridge state. Default: ~/Library/CloudStorage/OneDrive-Personal/cowork-tasks/ */
@@ -195,7 +199,104 @@ export interface BridgePaths {
   processed: string;
   /** Requests Cowork attempted but failed. (cowork-tasks/failed/) */
   failed: string;
+  /**
+   * Archive for outbound responses that have been successfully delivered to
+   * the requesting agent's inbox. Move-on-relay: relay atomically renames
+   * completed/<id>.json → relayed/<id>.json after sendMessage succeeds. The
+   * FS layout IS the dedup primitive (state file is a cache). Sole writer:
+   * the outbound relay. (cowork-tasks/relayed/)
+   */
+  relayed: string;
+  /**
+   * Inbound channel root — Claude writes initiation messages here. Sole
+   * writer: Claude (via OneDrive sync from the desktop side). Sole reader:
+   * the inbound-relay. (cowork-tasks/from-claude/)
+   */
+  from_claude_root: string;
+  /** Inbound messages awaiting tier-classification. (from-claude/pending/) */
+  from_claude_pending: string;
+  /** Sensitive inbound messages held for David approval. Sole writer: inbound-relay. (from-claude/pending-approval/) */
+  from_claude_pending_approval: string;
+  /** Inbound messages successfully delivered to the target agent's inbox. Sole writer: inbound-relay. (from-claude/processed/) */
+  from_claude_processed: string;
+  /** Inbound messages rejected by hard-rules or David. Sole writer: inbound-relay. (from-claude/blocked/) */
+  from_claude_blocked: string;
 }
+
+// ---------------------------------------------------------------------------
+// Inbound channel — Phase A (2026-06-30)
+// ---------------------------------------------------------------------------
+
+/**
+ * Categorical kinds of inbound message Claude can send to the fleet.
+ *
+ * Hard-rule matching ONLY runs on `kind === 'request'` (action-shaped
+ * messages). The other kinds (message / challenge / fact) are content;
+ * gating them defeats the purpose of having an independent red-team partner.
+ * M3 sensitivity classification runs on ALL kinds.
+ */
+export type InboundMessageKind =
+  /** Free-form text the target agent should read + respond to. */
+  | 'message'
+  /** Claude dissents from a fleet conclusion. Routes to target with high priority. */
+  | 'challenge'
+  /** A fact / observation Claude is contributing to fleet memory. */
+  | 'fact'
+  /** An action request (DO something). Routed through hard-rules + tier gate. */
+  | 'request';
+
+/**
+ * A single InboundMessage — what Claude writes into from-claude/pending/.
+ * Schema versioned via `schema_version` so future additive changes don't
+ * break the inbound-relay parser.
+ */
+export interface InboundMessage {
+  /** Schema version. Current = 1. */
+  schema_version: 1;
+  /** Unique id. Convention: `inbound-<unix-ms>-claude-<rand5>`. */
+  id: string;
+  /** Always 'claude' for Phase A. (Future: other external partners.) */
+  from: 'claude';
+  /** Target fleet agent (boss-personal, atlas, donna, kai, forge, etc.). */
+  to_agent: string;
+  /** Categorical kind — see InboundMessageKind. */
+  kind: InboundMessageKind;
+  /** Message priority. Maps directly to the bus Priority type. */
+  priority: 'urgent' | 'high' | 'normal' | 'low';
+  /** Human-readable body. The target agent sees this in their inbox. */
+  text: string;
+  /**
+   * Optional structured context (when kind === 'request' or 'challenge').
+   * Schema is kind-specific. For request: { url?, action?, params? }.
+   * For challenge: { fleet_conclusion?, evidence_url?, counter_argument? }.
+   */
+  context?: Record<string, unknown>;
+  /**
+   * Claude's self-declared sensitivity hint. Conservative default in the
+   * classifier: if absent OR true → treat as sensitive (better one extra
+   * David-approval prompt than one missed escalation).
+   */
+  sensitive_hint?: boolean;
+  /** ISO-8601 timestamp when Claude wrote the message. */
+  created_at: string;
+  /**
+   * HMAC signature over the canonical payload. Verified by the inbound-relay
+   * using the shared bridge key (loaded via loadBridgeKey). Verification
+   * failure → moved to from-claude/blocked/ with reason. NO retry.
+   */
+  sig: string;
+}
+
+/**
+ * V1 allowlist of inbound message kinds. All four are V1-supported. (The
+ * narrower control surface is hard-rules + tier-gating, not kind allowlist.)
+ */
+export const V1_INBOUND_KINDS: ReadonlyArray<InboundMessageKind> = [
+  'message',
+  'challenge',
+  'fact',
+  'request',
+];
 
 /**
  * Optional config for the bridge module. Read from agent config or env.

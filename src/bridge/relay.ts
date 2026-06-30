@@ -23,6 +23,7 @@ import { existsSync, readFileSync, readdirSync, statSync, renameSync, unlinkSync
 import { join } from 'path';
 import { sendMessage } from '../bus/message.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { acquireFileLock, releaseFileLock } from '../utils/file-lock.js';
 import type { BusPaths, Priority } from '../types/index.js';
 import type { BridgePaths, BridgeRequest, BridgeResponseMetadata } from './types.js';
 import {
@@ -178,6 +179,24 @@ export function relayTick(
     return result;
   }
 
+  // Phase A: one-writer enforcement. Acquire advisory lock on relay state.
+  // Operator-initiated CLI tick + daemon-scheduled tick can no longer collide.
+  // 5s timeout: if another tick is genuinely running we exit cleanly. Stale
+  // locks (crashed tick) are auto-released by acquireFileLock.
+  ensureDir(stateDir);
+  const lockTargetPath = join(stateDir, RELAY_STATE_FILENAME);
+  let lockHandle;
+  try {
+    lockHandle = acquireFileLock(lockTargetPath, { timeoutMs: 5_000 });
+  } catch (err) {
+    // Another tick has the lock. Exit gracefully — next tick will catch up.
+    result.failures.push({ id: '(lock)', reason: `relay lock contention: ${(err as Error).message}` });
+    return result;
+  }
+
+  // Phase A: ensure relayed/ archive dir exists. Move-on-relay target.
+  ensureDir(bridgePaths.relayed);
+
   const state = loadRelayState(stateDir);
   const seen = new Set(state.relayed_ids);
 
@@ -207,6 +226,15 @@ export function relayTick(
     }
 
     if (seen.has(parsed.request.id)) {
+      result.skipped_already_relayed++;
+      continue;
+    }
+
+    // Phase A FS-authoritative dedup: if the file was already moved to
+    // relayed/, skip it regardless of in-memory state. Handles the case
+    // where state file was lost/reset but the FS still has the truth.
+    if (existsSync(join(bridgePaths.relayed, file))) {
+      seen.add(parsed.request.id);
       result.skipped_already_relayed++;
       continue;
     }
@@ -330,6 +358,19 @@ export function relayTick(
       }
       seen.add(parsed.request.id);
       result.relayed++;
+      // Phase A move-on-relay: atomically archive the completed file into
+      // relayed/. After this point the FS itself proves the message was
+      // delivered — even if state file is lost, redelivery is impossible.
+      // Failure here does NOT undo the relay (message is in the inbox); we
+      // log + continue so the operator can investigate.
+      try {
+        renameSync(fullPath, join(bridgePaths.relayed, file));
+      } catch (mvErr) {
+        result.failures.push({
+          id: parsed.request.id,
+          reason: `move-on-relay failed (msg delivered, file stuck in completed/): ${(mvErr as Error).message}`,
+        });
+      }
     } catch (err) {
       result.failures.push({ id: parsed.request.id, reason: (err as Error).message });
     }
@@ -339,5 +380,6 @@ export function relayTick(
   state.last_tick_at = new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z');
   saveRelayState(stateDir, state);
 
+  releaseFileLock(lockHandle);
   return result;
 }
