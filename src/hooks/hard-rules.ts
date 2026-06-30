@@ -29,6 +29,14 @@ export interface HardRule {
   reason: string;
   /** Pure predicate. Returns true when the tool call MATCHES the rule (i.e. should be gated). */
   match: (toolName: string, toolInput: any, env: HardRuleEnv) => boolean;
+  /**
+   * When true, the rule cannot be overridden by an approval token — block
+   * always. Used for legal-bright-line rules where there is no operationally
+   * sound override (e.g. CAPTCHA solver services, anti-detect libraries,
+   * IP-rotation-to-evade tools). The blocking IS the legal protection.
+   * Default: false (rule is overridable via approve-hard-rule).
+   */
+  non_overridable?: boolean;
 }
 
 export interface HardRuleEnv {
@@ -236,15 +244,183 @@ export const RULE_PUBLIC_POST: HardRule = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Fetch-ladder legal-bright-line additions (per spec
+// orgs/personal/agents/forge/specs/fetch-ladder-2026-06-30.md):
+//
+//   5. auto_login_to_target — auto-login to scrape gated data (overridable
+//      with explicit David go; rare)
+//   6. captcha_solver_endpoint — NON-OVERRIDABLE (bright line)
+//   7. anti_detect_browser_lib — NON-OVERRIDABLE (bright line)
+//   8. ip_rotation_to_evade — NON-OVERRIDABLE (bright line)
+//
+// Sources:
+//   - Van Buren 2021 (SCOTUS) "gates-up-or-down"
+//   - hiQ v LinkedIn ($500K breach-of-contract judgment for logged-in scrape)
+// ---------------------------------------------------------------------------
+
 /**
- * The MVP denylist (V1, per boss-personal C4 approval 2026-06-29).
+ * Fetch-ladder rule 5: auto-login to a target whose response we're then
+ * scraping. Crossing a login wall converts weak browsewrap ToS into
+ * enforceable clickwrap + opens CFAA exposure.
  *
- * Order matters: first matching rule wins. Add new rules at the END so
- * existing matches stay stable.
+ * Overridable — David can grant approval for specific operational needs
+ * (e.g. agent logging into its OWN authenticated service), but routing is
+ * to [HUMAN] by default.
+ *
+ * Matches:
+ *   - Bash navigation to login/signin/auth endpoints followed by credential
+ *     submission patterns
+ *   - WebFetch POST to common auth endpoints with credential payloads
+ *   - agent-browser tool calls that type into password-shaped fields
+ */
+export const RULE_AUTO_LOGIN_TO_TARGET: HardRule = {
+  name: 'auto_login_to_target',
+  reason: "Auto-login to scrape gated data is a known legal bright line (hiQ v LinkedIn). Route to [HUMAN] by default. If the login is to an agent's OWN service (not a scrape target), request explicit approval via `cortextos bus approve-hard-rule auto_login_to_target`.",
+  match: (toolName, toolInput) => {
+    // Bash: pattern-match common cred-injection shapes
+    if (toolName === 'Bash') {
+      const cmd: string = toolInput?.command || '';
+      // curl POST with password/passwd field
+      if (/curl[^|&;]*-d\s+['"]?[^'"]*\b(password|passwd|pwd)=/i.test(cmd)) return true;
+      // login form POST with username + password in body
+      if (/curl[^|&;]*-X\s*POST[^|&;]*\bpassword=/i.test(cmd)) return true;
+    }
+    // WebFetch POST to known auth endpoint
+    if (toolName === 'WebFetch') {
+      const url: string = toolInput?.url || '';
+      if (/\b(login|signin|sign-in|authenticate|oauth\/token)\b/i.test(url)) {
+        const prompt: string = toolInput?.prompt || '';
+        // Tighten: only block if it looks like cred submission, not docs/research
+        if (/password|credential|sign in to|authenticate as/i.test(prompt)) return true;
+      }
+    }
+    // agent-browser type-into-password — match by the field hint
+    if (/^mcp__.*agent[-_]?browser.*__type/i.test(toolName)) {
+      const ref: string = toolInput?.ref || '';
+      if (/password|passwd|pwd/i.test(ref)) return true;
+    }
+    return false;
+  },
+};
+
+/** Domains of known CAPTCHA-solver services. Bright-line forbidden. */
+const CAPTCHA_SOLVER_DOMAINS = [
+  '2captcha.com', 'anti-captcha.com', 'capsolver.com',
+  'deathbycaptcha.com', 'capmonster.cloud', 'rucaptcha.com',
+  'solvecaptcha.com', 'imagetyperz.com',
+];
+
+/**
+ * Fetch-ladder rule 6: NON-OVERRIDABLE. Any HTTP call to a CAPTCHA-solver
+ * service. Defeating an access control via a third-party solver is the
+ * unresolved CFAA edge + bad-faith evidence in every relevant case.
+ */
+export const RULE_CAPTCHA_SOLVER_ENDPOINT: HardRule = {
+  name: 'captcha_solver_endpoint',
+  reason: "Calls to CAPTCHA-solver services (2Captcha, CapSolver, etc.) defeat an access control and are a legal bright line. There is no operationally sound use case in cortextOS — the escalation past a CAPTCHA is a HUMAN (Phase 2 rung 6), never a solver. This rule is non-overridable.",
+  non_overridable: true,
+  match: (toolName, toolInput) => {
+    if (toolName === 'Bash') {
+      const cmd: string = toolInput?.command || '';
+      if (CAPTCHA_SOLVER_DOMAINS.some((d) => cmd.includes(d))) return true;
+    }
+    if (toolName === 'WebFetch') {
+      const url: string = toolInput?.url || '';
+      if (CAPTCHA_SOLVER_DOMAINS.some((d) => url.includes(d))) return true;
+    }
+    return false;
+  },
+};
+
+/** Package names of known anti-detect / JA3-spoof libraries. */
+const ANTI_DETECT_PACKAGES = [
+  'undetected-chromedriver', 'undetected_chromedriver',
+  'playwright-stealth', 'puppeteer-extra-plugin-stealth',
+  'puppeteer-stealth',
+  'curl-impersonate', 'curl_impersonate',
+  'tls-client', 'tls_client',
+  'selenium-stealth',
+];
+
+/**
+ * Fetch-ladder rule 7: NON-OVERRIDABLE. Installation OR direct invocation of
+ * known anti-detect / TLS-spoof libraries. These exist specifically to defeat
+ * fingerprint detection — they are the technical control circumvention.
+ *
+ * Legal-clean alternative: rung 5 real Chrome profile — actually IS a real
+ * browser, not a spoof. Phase 2.
+ */
+export const RULE_ANTI_DETECT_BROWSER_LIB: HardRule = {
+  name: 'anti_detect_browser_lib',
+  reason: "Anti-detect / TLS-spoof libraries (undetected-chromedriver, playwright-stealth, curl-impersonate, etc.) exist specifically to circumvent fingerprint-based access controls. The legal alternative is a REAL browser profile (Phase 2 rung 5), not a spoofed one. This rule is non-overridable.",
+  non_overridable: true,
+  match: (toolName, toolInput) => {
+    if (toolName !== 'Bash') return false;
+    const cmd: string = toolInput?.command || '';
+    // Installation: npm/pip/poetry/uv add of these packages
+    for (const pkg of ANTI_DETECT_PACKAGES) {
+      const installRe = new RegExp(`\\b(npm\\s+(i|install|add)|pip\\s+install|pip3\\s+install|poetry\\s+add|uv\\s+(pip\\s+install|add))\\b[^|&;]*\\b${escapeRegex(pkg)}\\b`, 'i');
+      if (installRe.test(cmd)) return true;
+      // Direct invocation of the binary form (curl_impersonate ships a curl-impersonate-chrome binary)
+      const invokeRe = new RegExp(`\\b${escapeRegex(pkg)}[-_][a-z0-9]+\\b`, 'i');
+      if (invokeRe.test(cmd)) return true;
+    }
+    return false;
+  },
+};
+
+/** Hostnames of rotating-proxy services typically used for IP-evasion. */
+const IP_ROTATION_DOMAINS = [
+  'brightdata.com', 'brd.superproxy.io', 'luminati.io', 'lum-superproxy.io', 'zproxy.lum-superproxy.io',
+  'smartproxy.com', 'oxylabs.io', 'oxylabs.com',
+  'soax.com', 'iproyal.com', 'netnut.io',
+  'rayobyte.com', 'proxyrack.com',
+];
+
+/**
+ * Fetch-ladder rule 8: NON-OVERRIDABLE. Use of rotating-proxy services
+ * intended to evade IP-based access blocks. Using a residential proxy to
+ * scrape a site that has blocked your home IP is the textbook bright line.
+ *
+ * Legal-clean alternative: respect 429/403, back off, escalate to rung 4
+ * (archive) or Phase 2 rung 6 (human-gate). Never burn through proxy IPs.
+ */
+export const RULE_IP_ROTATION_TO_EVADE: HardRule = {
+  name: 'ip_rotation_to_evade',
+  reason: "Rotating-proxy / IP-evasion services (Bright Data, Smartproxy, Oxylabs, etc.) bypass IP-based access controls — a bright legal line. Respect 429/403 + back off + escalate via rung 4 (archive) or Phase 2 rung 6 (human-gate) instead. This rule is non-overridable.",
+  non_overridable: true,
+  match: (toolName, toolInput) => {
+    if (toolName === 'Bash') {
+      const cmd: string = toolInput?.command || '';
+      if (IP_ROTATION_DOMAINS.some((d) => cmd.includes(d))) return true;
+      // Common proxy-env-var patterns
+      if (/\b(HTTP|HTTPS|ALL)_PROXY=https?:\/\/[^@\s]+@(brd|residential|rotating)/i.test(cmd)) return true;
+    }
+    if (toolName === 'WebFetch') {
+      const url: string = toolInput?.url || '';
+      if (IP_ROTATION_DOMAINS.some((d) => url.includes(d))) return true;
+    }
+    return false;
+  },
+};
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The full denylist. ORDER MATTERS — first matching rule wins. Existing
+ * rules (V1, slots 1-4) come first; fetch-ladder additions (slots 5-8)
+ * append at the end so existing matches stay stable.
  */
 export const HARD_RULES: ReadonlyArray<HardRule> = [
   RULE_GIT_PUSH_MAIN,
   RULE_RM_OUTSIDE_WORKSPACE,
   RULE_GMAIL_SEND_WITHOUT_APPROVAL,
   RULE_PUBLIC_POST,
+  RULE_AUTO_LOGIN_TO_TARGET,
+  RULE_CAPTCHA_SOLVER_ENDPOINT,
+  RULE_ANTI_DETECT_BROWSER_LIB,
+  RULE_IP_ROTATION_TO_EVADE,
 ];

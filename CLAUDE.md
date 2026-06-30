@@ -112,6 +112,47 @@ Boss's existing `archive-comms-daily` cron is superseded by the framework wire �
 
 Spec: `orgs/personal/agents/forge/specs/comms-archive-2026-06-29.md`.
 
+## Fetch ladder (legal, resilient web retrieval)
+
+Five-rung ladder for fetching public web data, conservative-by-design. Stops at the first rung that returns data; stops + flags on a policy/legal failure. Per-domain `SitePolicy` cache means the fleet learns which rung works for which site instead of re-banging Cloudflare.
+
+**Phase 1 rungs** (live; no David setup):
+- **0 robots/ToS** — fetch + parse robots.txt; sets `do_not_attempt` if disallowed
+- **1 official-api** — registry lookup at `src/fetch-ladder/official-api.ts` (Notion, GitHub, Wikipedia, etc.); surfaces `api_base` + `auth_env` for the caller
+- **2 structured-data** — sitemap.xml, RSS/Atom feeds, JSON-LD, OpenGraph, schema.org microdata
+- **3 search-api** — Brave (via `BRAVE_SEARCH_KEY`); inside agent contexts the built-in WebSearch is the primary path
+- **4 archive** — Wayback Machine first, archive.today fallback (~20MB/day soft cap)
+
+**Phase 2 rungs** (HOLD — gated on David's Chrome profile setup):
+- **5 real-browser** — agent-browser headful + real Chrome profile (legitimate because it IS a real browser, not a spoof)
+- **6 human-gate** — operator clears the challenge themselves via Telegram handshake
+
+**Legal bright lines** — encoded as hard-rule hooks (`src/hooks/hard-rules.ts`):
+- `auto_login_to_target` — overridable; default route to [HUMAN]
+- `captcha_solver_endpoint` — **NON-OVERRIDABLE** (2Captcha, CapSolver, etc.)
+- `anti_detect_browser_lib` — **NON-OVERRIDABLE** (undetected-chromedriver, playwright-stealth, curl-impersonate, etc.)
+- `ip_rotation_to_evade` — **NON-OVERRIDABLE** (Bright Data, Smartproxy, Oxylabs, etc.)
+
+**Operator CLI**:
+```bash
+cortextos bus fetch-url <url> [--force] [--format json|text]
+cortextos bus site-policy list
+cortextos bus site-policy show <domain-or-url>
+cortextos bus site-policy forget <domain-or-url>
+```
+
+**Programmatic** (from any agent or module):
+```typescript
+import { fetchUrl } from 'cortextos/dist/fetch-ladder/index.js';
+const r = await fetchUrl('https://notion.so/page', { ctxRoot });
+// r.success, r.rung_succeeded, r.content, r.attempts (full history), r.policy_after
+```
+
+Site-policy cache lives fleet-wide at `<ctxRoot>/state/fetch-ladder/site-policy/<domain>.json` (TTL 168h). Promote-on-success / demote-on-fail. Operator `forget` to override after material site changes.
+
+Design source: `orgs/personal/reference/fetch-ladder-design-2026-06-30.md` (legal grounding: Van Buren 2021, hiQ, Meta v Bright Data).
+Spec: `orgs/personal/agents/forge/specs/fetch-ladder-2026-06-30.md`.
+
 ## Per-agent Claude Code config isolation
 
 Each agent can have its own `CLAUDE_CONFIG_DIR` so its settings, sessions, projects history, and `customApiKeyResponses.approved` list are isolated from other agents on the same host. Controlled by `claude_config_dir` in the agent's `config.json`:

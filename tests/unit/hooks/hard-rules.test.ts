@@ -9,6 +9,10 @@ import {
   RULE_RM_OUTSIDE_WORKSPACE,
   RULE_GMAIL_SEND_WITHOUT_APPROVAL,
   RULE_PUBLIC_POST,
+  RULE_AUTO_LOGIN_TO_TARGET,
+  RULE_CAPTCHA_SOLVER_ENDPOINT,
+  RULE_ANTI_DETECT_BROWSER_LIB,
+  RULE_IP_ROTATION_TO_EVADE,
   approvalDirFor,
   findFreshApprovalToken,
   consumeApprovalToken,
@@ -23,13 +27,36 @@ const envFor = (agentDir: string, ctxRoot: string): HardRuleEnv => ({
 });
 
 describe('hard-rules — denylist composition', () => {
-  it('exports the 4 MVP rules in declared order', () => {
+  it('exports the V1 rules in declared order, fetch-ladder additions appended', () => {
     expect(HARD_RULES.map(r => r.name)).toEqual([
       'git_push_main',
       'rm_outside_workspace',
       'gmail_send_without_approval',
       'public_post',
+      'auto_login_to_target',
+      'captcha_solver_endpoint',
+      'anti_detect_browser_lib',
+      'ip_rotation_to_evade',
     ]);
+  });
+
+  it('bright-line fetch-ladder rules are non_overridable', () => {
+    const ruleByName = (n: string) => HARD_RULES.find(r => r.name === n)!;
+    expect(ruleByName('captcha_solver_endpoint').non_overridable).toBe(true);
+    expect(ruleByName('anti_detect_browser_lib').non_overridable).toBe(true);
+    expect(ruleByName('ip_rotation_to_evade').non_overridable).toBe(true);
+  });
+
+  it('auto_login_to_target is overridable (token mechanism)', () => {
+    const r = HARD_RULES.find(r => r.name === 'auto_login_to_target')!;
+    expect(r.non_overridable).toBeFalsy();
+  });
+
+  it('original V1 rules remain overridable (no non_overridable flag)', () => {
+    expect(HARD_RULES[0].non_overridable).toBeFalsy(); // git_push_main
+    expect(HARD_RULES[1].non_overridable).toBeFalsy(); // rm_outside_workspace
+    expect(HARD_RULES[2].non_overridable).toBeFalsy(); // gmail_send
+    expect(HARD_RULES[3].non_overridable).toBeFalsy(); // public_post
   });
 });
 
@@ -220,5 +247,163 @@ describe('approval-token mechanism', () => {
 
   it('APPROVAL_TOKEN_MAX_AGE_MS is 5 minutes', () => {
     expect(APPROVAL_TOKEN_MAX_AGE_MS).toBe(5 * 60 * 1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fetch-ladder legal-bright-line rules
+// ---------------------------------------------------------------------------
+
+describe('RULE_AUTO_LOGIN_TO_TARGET', () => {
+  const env = envFor('/tmp/agent', '/tmp/ctx');
+
+  it('matches Bash curl with password= in -d body', () => {
+    expect(RULE_AUTO_LOGIN_TO_TARGET.match(
+      'Bash',
+      { command: "curl -d 'username=foo&password=bar' https://target.example/login" },
+      env,
+    )).toBe(true);
+  });
+
+  it('matches Bash curl POST with password= field', () => {
+    expect(RULE_AUTO_LOGIN_TO_TARGET.match(
+      'Bash',
+      { command: 'curl -X POST -d "password=secret" https://target.example/auth' },
+      env,
+    )).toBe(true);
+  });
+
+  it('matches WebFetch to /login URL with credential prompt', () => {
+    expect(RULE_AUTO_LOGIN_TO_TARGET.match(
+      'WebFetch',
+      { url: 'https://target.example/login', prompt: 'Sign in to retrieve the dashboard data' },
+      env,
+    )).toBe(true);
+  });
+
+  it('does NOT match WebFetch to /login for documentation read', () => {
+    expect(RULE_AUTO_LOGIN_TO_TARGET.match(
+      'WebFetch',
+      { url: 'https://docs.example.com/api/login-endpoint', prompt: 'What params does this endpoint take?' },
+      env,
+    )).toBe(false);
+  });
+
+  it('matches agent-browser type into a password-shaped field', () => {
+    expect(RULE_AUTO_LOGIN_TO_TARGET.match(
+      'mcp__claude_ai_agent_browser__type',
+      { ref: 'password-input-field', text: 'secret123' },
+      env,
+    )).toBe(true);
+  });
+
+  it('does NOT match agent-browser type into normal field', () => {
+    expect(RULE_AUTO_LOGIN_TO_TARGET.match(
+      'mcp__claude_ai_agent_browser__type',
+      { ref: 'search-query', text: 'hello' },
+      env,
+    )).toBe(false);
+  });
+});
+
+describe('RULE_CAPTCHA_SOLVER_ENDPOINT (non-overridable)', () => {
+  const env = envFor('/tmp/agent', '/tmp/ctx');
+
+  it('matches Bash curl to 2captcha', () => {
+    expect(RULE_CAPTCHA_SOLVER_ENDPOINT.match(
+      'Bash', { command: 'curl https://2captcha.com/in.php' }, env,
+    )).toBe(true);
+  });
+
+  it('matches Bash curl to capsolver', () => {
+    expect(RULE_CAPTCHA_SOLVER_ENDPOINT.match(
+      'Bash', { command: 'curl https://capsolver.com/api/createTask' }, env,
+    )).toBe(true);
+  });
+
+  it('matches WebFetch to a solver service', () => {
+    expect(RULE_CAPTCHA_SOLVER_ENDPOINT.match(
+      'WebFetch', { url: 'https://anti-captcha.com/api/v2/createTask' }, env,
+    )).toBe(true);
+  });
+
+  it('does NOT match curl to unrelated domains', () => {
+    expect(RULE_CAPTCHA_SOLVER_ENDPOINT.match(
+      'Bash', { command: 'curl https://example.com/api' }, env,
+    )).toBe(false);
+  });
+
+  it('is flagged as non_overridable', () => {
+    expect(RULE_CAPTCHA_SOLVER_ENDPOINT.non_overridable).toBe(true);
+  });
+});
+
+describe('RULE_ANTI_DETECT_BROWSER_LIB (non-overridable)', () => {
+  const env = envFor('/tmp/agent', '/tmp/ctx');
+
+  it('matches pip install undetected-chromedriver', () => {
+    expect(RULE_ANTI_DETECT_BROWSER_LIB.match(
+      'Bash', { command: 'pip install undetected-chromedriver' }, env,
+    )).toBe(true);
+  });
+
+  it('matches npm install puppeteer-extra-plugin-stealth', () => {
+    expect(RULE_ANTI_DETECT_BROWSER_LIB.match(
+      'Bash', { command: 'npm install puppeteer-extra-plugin-stealth' }, env,
+    )).toBe(true);
+  });
+
+  it('matches pip install curl-impersonate', () => {
+    expect(RULE_ANTI_DETECT_BROWSER_LIB.match(
+      'Bash', { command: 'pip install curl-impersonate' }, env,
+    )).toBe(true);
+  });
+
+  it('matches uv pip install playwright-stealth', () => {
+    expect(RULE_ANTI_DETECT_BROWSER_LIB.match(
+      'Bash', { command: 'uv pip install playwright-stealth' }, env,
+    )).toBe(true);
+  });
+
+  it('does NOT match install of legitimate playwright', () => {
+    expect(RULE_ANTI_DETECT_BROWSER_LIB.match(
+      'Bash', { command: 'npm install playwright' }, env,
+    )).toBe(false);
+  });
+
+  it('is flagged as non_overridable', () => {
+    expect(RULE_ANTI_DETECT_BROWSER_LIB.non_overridable).toBe(true);
+  });
+});
+
+describe('RULE_IP_ROTATION_TO_EVADE (non-overridable)', () => {
+  const env = envFor('/tmp/agent', '/tmp/ctx');
+
+  it('matches Bash curl to brightdata', () => {
+    expect(RULE_IP_ROTATION_TO_EVADE.match(
+      'Bash', { command: 'curl --proxy http://x:y@brd.superproxy.io:22225 https://target.com' }, env,
+    )).toBe(true);
+  });
+
+  it('matches Bash curl with smartproxy domain', () => {
+    expect(RULE_IP_ROTATION_TO_EVADE.match(
+      'Bash', { command: 'curl --proxy http://smartproxy.com:8080 https://target.com' }, env,
+    )).toBe(true);
+  });
+
+  it('matches HTTPS_PROXY env with rotating-proxy host', () => {
+    expect(RULE_IP_ROTATION_TO_EVADE.match(
+      'Bash', { command: 'HTTPS_PROXY=http://u:p@brd-customer-1234:1234@brd.example.com curl https://target.com' }, env,
+    )).toBe(true);
+  });
+
+  it('does NOT match legitimate proxy use (corporate proxy.example.com)', () => {
+    expect(RULE_IP_ROTATION_TO_EVADE.match(
+      'Bash', { command: 'curl --proxy http://proxy.example.com:8080 https://api.com' }, env,
+    )).toBe(false);
+  });
+
+  it('is flagged as non_overridable', () => {
+    expect(RULE_IP_ROTATION_TO_EVADE.non_overridable).toBe(true);
   });
 });

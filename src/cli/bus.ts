@@ -24,6 +24,7 @@ import { resolveEnv } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { registerBridgeCommands } from './bridge.js';
+import { registerFetchLadderCommands } from './fetch-ladder.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
 import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition } from '../types/index.js';
 
@@ -2932,3 +2933,6 @@ function pct(v: number): string {
 
 // Register the agent↔Cowork bridge subcommands (bridge-request, bridge-status, bridge-list, bridge-relay-tick, bridge-janitor).
 registerBridgeCommands(busCommand);
+
+// Register fetch-ladder commands (fetch-url, site-policy show/list/forget).
+registerFetchLadderCommands(busCommand);

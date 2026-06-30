@@ -96,6 +96,14 @@ async function main(): Promise<void> {
     }
     if (!matched) continue;
 
+    // Non-overridable rules (e.g. CAPTCHA solver, anti-detect, IP-rotation):
+    // legal bright lines with no override path. Block always.
+    if (rule.non_overridable) {
+      logBlockedEvent(rule.name, tool_name, env.agentName);
+      outputDecision('deny', `BLOCKED by hard rule '${rule.name}' (non-overridable): ${rule.reason}`);
+      return;
+    }
+
     // Rule fired. Check for an approval token.
     const token = findFreshApprovalToken(ruleEnv, rule.name);
     if (token) {
