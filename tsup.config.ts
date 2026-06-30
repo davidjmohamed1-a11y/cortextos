@@ -14,6 +14,7 @@ export default defineConfig({
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
     'hooks/hook-loop-detector': 'src/hooks/hook-loop-detector.ts',
     'hooks/hook-hard-rule-gate': 'src/hooks/hook-hard-rule-gate.ts',
+    'bridge/local-executor': 'src/bridge/local-executor.ts',
   },
   format: ['cjs'],
   target: 'node20',
