@@ -1,12 +1,12 @@
 ---
 name: document-intake
-description: "David dropped documents (PDFs, Word, RTF, TXT, MD) in his inbox folder, OR sent a document via Telegram — extract the text, surface any action items as tracked tasks (via the bus), then move the file to processed/. You should invoke this any time you see a new file in ~/Whitestone-Fleet/Inbox/documents/, or when a Telegram document message arrives with local_file:. This is Jarvis capture-channel 2 — same downstream as voice-transcription (text → action items → tracked tasks)."
+description: "David dropped documents (PDFs, Word, RTF, TXT, MD) in his inbox folder, OR sent a document via Telegram — extract the text, surface any action items as tracked tasks (via the bus), then move the file to processed/. You should invoke this any time you see a new file in ~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/, or when a Telegram document message arrives with local_file:. This is Jarvis capture-channel 2 — same downstream as voice-transcription (text → action items → tracked tasks)."
 triggers: ["document intake", "intake documents", "process docs", "process documents", "inbox folder", "documents inbox", "handle document", "extract action items", "action items from doc", "read pdf", "process pdf", "process word", "process docx", "watch inbox", "check inbox folder", "new document dropped", "action items pdf"]
 ---
 
 # Document intake — Jarvis capture-channel 2
 
-Native macOS extraction pipeline. David drops files in `~/Whitestone-Fleet/Inbox/documents/` (or sends a doc via Telegram); this skill scans, extracts text, identifies action items with your judgment, files them as tracked tasks, and archives the source.
+Native macOS extraction pipeline. David drops files in `~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/` (or sends a doc via Telegram); this skill scans, extracts text, identifies action items with your judgment, files them as tracked tasks, and archives the source.
 
 Same downstream spine as the voice channel: **capture → text → agent inbox → tracked task**. No Notion write in V1 (stretch, waits on the Boss Notion token flow).
 
@@ -15,7 +15,7 @@ Same downstream spine as the voice channel: **capture → text → agent inbox �
 ## When to run
 
 Invoke this skill when:
-- A new file appears in `~/Whitestone-Fleet/Inbox/documents/` (any format below).
+- A new file appears in `~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/` (any format below).
 - A `=== TELEGRAM DOCUMENT ===` message arrives with `local_file:` — same handler applies; treat the local_file path as the input.
 - David asks you to "process the inbox" / "read what's in Whitestone-Fleet/Inbox".
 - On a heartbeat cycle: quickly scan the folder for any pending files — if none, this is a no-op (do not invent work).
@@ -50,7 +50,7 @@ Failure modes worth naming:
 Run this as a single-pass loop over the inbox contents. Each file is one loop iteration; skip nothing silently.
 
 ```bash
-INBOX="$HOME/Whitestone-Fleet/Inbox/documents"
+INBOX="$HOME/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents"
 PROCESSED="$INBOX/processed/$(date +%Y-%m-%d)"
 SKIPPED="$INBOX/processed/skipped/$(date +%Y-%m-%d)"
 EXTRACT="$CTX_FRAMEWORK_ROOT/scripts/document-intake/extract.sh"
@@ -206,10 +206,10 @@ Never spawn infinite retry loops. One pass, one attempt per file.
 
 ## Files this skill touches
 
-- Read: `~/Whitestone-Fleet/Inbox/documents/*` (top-level files)
+- Read: `~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/*` (top-level files)
 - Read: any `local_file:` path from a Telegram document message
-- Write: `~/Whitestone-Fleet/Inbox/documents/processed/<YYYY-MM-DD>/*` (archive)
-- Write: `~/Whitestone-Fleet/Inbox/documents/processed/skipped/<YYYY-MM-DD>/*` (skip archive + reason)
+- Write: `~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/processed/<YYYY-MM-DD>/*` (archive)
+- Write: `~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/processed/skipped/<YYYY-MM-DD>/*` (skip archive + reason)
 - Write: cortextos tasks via `cortextos bus create-task`
 - Read/Exec: `scripts/document-intake/extract.sh` + `scripts/document-intake/pdf-extract.swift`
 
