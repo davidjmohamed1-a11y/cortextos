@@ -83,6 +83,42 @@ Pure read-only — never writes to PTY, never sends prompts. Falls through grace
 
 Spec: `orgs/personal/agents/forge/specs/watchdog-liveness-probe-2026-06-29.md`.
 
+## Nightly truth-reconciliation cron
+
+Formalizes the "verify each item is live" rule mechanically. Every night at 03:00 ET (07:00 UTC) atlas fires `nightly-truth-reconciliation`, which walks every open+in-progress bus task across every org and matches it against reality (git-log commit signals + stale thresholds + active-work-skip guard). Ships 2026-07-02 (build #1 per Fable audit).
+
+**Signals + actions**:
+- **STRONG** `task.id` appears in a commit body → AUTO-CLOSE with commit SHA reference in `result`
+- **STRONG** commit subject contains `task.title` verbatim (case-insensitive) → AUTO-CLOSE
+- **WEAK** significant title-word overlap (≥3 words + ≥50% coverage) with a commit subject → SUGGEST-CLOSE (report only, never auto)
+- **STALE-OPEN** status=open, no update in >14 days → FLAG-STALE (report only)
+- **STALE-IN-PROGRESS** status=in_progress, no update in >30 days → FLAG-STALE with escalation flag
+- **ACTIVE-WORK SKIP** never touches a task updated in the last 4h (respects live work)
+- **CROSS-ORG** walks `~/.cortextos/*/orgs/*/tasks/*.json` unified (closes the scatter that lets "board lies" happen)
+
+**Output**:
+- JSON report at `<ctxRoot>/state/reconciliation/YYYY-MM-DD.json` — full verdicts + evidence + config used
+- Bus message to boss-personal — one-line summary for the morning brief
+
+**Auto-close protocol**: modifies the task JSON directly (bypasses default-org CLI resolution which was the original bug), sets `status=completed`, `completed_at=now`, appends an `[auto-closed by nightly-truth ...]` note to `result` with the evidence.
+
+**Operator CLI**:
+```bash
+# Run on demand (default: live-mode + send bus report)
+scripts/reconciliation/nightly-truth.py
+
+# Dry-run: classify + report only, no writes
+scripts/reconciliation/nightly-truth.py --dry-run --no-report
+
+# Override roots for testing
+scripts/reconciliation/nightly-truth.py --ctx-root /tmp/x --framework-root /tmp/repo
+```
+
+**Config knobs** (env vars, tune without code changes):
+`RECON_STALE_OPEN_DAYS` (14), `RECON_STALE_INPROGRESS_DAYS` (30), `RECON_ACTIVE_WORK_SKIP_HOURS` (4), `RECON_GIT_LOG_WINDOW_DAYS` (45).
+
+Tests: `tests/reconciliation/nightly-truth.test.sh` — controlled-fixture bash tests exercising each signal branch + live-mode file mutation + completed-task exclusion.
+
 ## Comms archive
 
 Durable structured archive of every agent message. Per-agent JSONL per month at:
