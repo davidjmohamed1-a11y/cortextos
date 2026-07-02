@@ -1150,7 +1150,26 @@ describe('Scenario 6: Concurrent stress — 10 crons fire simultaneously, no rac
 // Scenario 7 — Dashboard polling accuracy (Day 7)
 // ---------------------------------------------------------------------------
 
-describe('Scenario 7: Dashboard polling accuracy throughout simulation', () => {
+// Scenario 7 uses `import('next/server')` dynamically inside its `it()`.
+// That import requires dashboard/node_modules/next to be installed — which
+// isn't guaranteed on framework devs' machines. Skip cleanly when Next
+// isn't resolvable, run when it is. Same pattern as vitest.config.ts's
+// exclude list (build #3 per Fable audit, 2026-07-02).
+let __nextAvailable = false;
+try {
+  // Use require.resolve semantics via a dynamic path check.
+  // We can't `await import()` at module load, so we probe the aliased file
+  // that vitest.config.ts's `next/server` alias points at.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  __nextAvailable = require('fs').existsSync(
+    require('path').resolve(__dirname, '..', '..', 'dashboard', 'node_modules', 'next', 'server.js'),
+  );
+} catch {
+  __nextAvailable = false;
+}
+const describeWithNext = __nextAvailable ? describe : describe.skip;
+
+describeWithNext('Scenario 7: Dashboard polling accuracy throughout simulation', () => {
   // This scenario imports the real dashboard API routes to poll during simulation.
   // We follow the Phase 4 pattern: routes called directly with NextRequest,
   // CTX_ROOT set to our tmpRoot, enabled-agents.json written to config dir.

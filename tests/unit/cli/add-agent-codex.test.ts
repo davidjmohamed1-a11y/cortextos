@@ -128,7 +128,15 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     const skills = readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory())
       .map(d => d.name);
-    expect(skills.length).toBe(23);
+    // Skill count is derived from the codex template's own tree so this test
+    // doesn't need to be re-bumped every time a new skill is added
+    // (add-agent-template-parity.test.ts enforces claude<->codex parity).
+    const expectedSkillCount = readdirSync(
+      join(__dirname, '..', '..', '..', 'templates', 'agent-codex',
+        'plugins', 'cortextos-agent-skills', 'skills'),
+      { withFileTypes: true },
+    ).filter((d) => d.isDirectory()).length;
+    expect(skills.length).toBe(expectedSkillCount);
     // Spot check: comms is the skill that teaches the Telegram reply pattern.
     expect(skills).toContain('comms');
     expect(skills).toContain('onboarding');
@@ -146,7 +154,14 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     const codexSkillsDir = join(tempHome, '.codex', 'skills');
     expect(existsSync(codexSkillsDir)).toBe(true);
     const links = readdirSync(codexSkillsDir).filter(n => n.startsWith('codex-links__'));
-    expect(links.length).toBe(23);
+    // Derived from the template so it doesn't need re-bumping per new skill
+    // (parity is separately enforced by add-agent-template-parity.test.ts).
+    const expectedLinkCount = readdirSync(
+      join(__dirname, '..', '..', '..', 'templates', 'agent-codex',
+        'plugins', 'cortextos-agent-skills', 'skills'),
+      { withFileTypes: true },
+    ).filter((d) => d.isDirectory()).length;
+    expect(links.length).toBe(expectedLinkCount);
 
     // Each entry must be a symlink (not a copy), pointing at the agent's local skill dir.
     for (const link of links) {
