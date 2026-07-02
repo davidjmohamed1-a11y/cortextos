@@ -17,6 +17,7 @@ import { TodayLane } from '@/components/eos/today-lane';
 import { StrategyZone } from '@/components/eos/strategy-zone';
 import { FleetStrip } from '@/components/eos/fleet-strip';
 import { CompletionStreak } from '@/components/eos/completion-streak';
+import { ForceDark } from '@/components/eos/force-dark';
 
 import { getEosNow } from '@/lib/data/eos';
 import { getCompletionStreak } from '@/lib/data/streaks';
@@ -50,6 +51,7 @@ export default async function EosPage({
 
   return (
     <div className="flex flex-col gap-6 pb-24">
+      <ForceDark />
       {/* Streak badge — subtle, top-right */}
       <div className="flex justify-end -mb-2">
         <CompletionStreak streak={streak} />

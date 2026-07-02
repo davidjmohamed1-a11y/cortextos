@@ -28,9 +28,9 @@ export function FleetStrip({ agents, heartbeats, pendingApprovals }: FleetStripP
   }
 
   return (
-    <Card className="sticky bottom-0 bg-card/95 backdrop-blur">
+    <Card className="sticky bottom-0 bg-zinc-950/95 border-zinc-800 backdrop-blur shadow-lg shadow-black/40">
       <CardContent className="pt-3 pb-3">
-        <div className="flex items-center gap-4 overflow-x-auto">
+        <div className="flex items-center gap-3 overflow-x-auto">
           {agents.map((agent) => {
             const hb = hbByAgent.get(agent.name);
             const pending = approvalsByAgent.get(agent.name) ?? [];
@@ -66,12 +66,12 @@ function AgentChip({
       <button
         type="button"
         onClick={() => pending.length > 0 && setExpanded((v) => !v)}
-        className={`flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-muted/20 hover:bg-muted/40 transition-colors ${
-          pending.length > 0 ? 'cursor-pointer' : 'cursor-default'
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-900/70 hover:bg-zinc-800/80 transition-colors ${
+          pending.length > 0 ? 'cursor-pointer ring-2 ring-red-500/40' : 'cursor-default'
         }`}
       >
         <span className="text-lg" aria-hidden>🔹</span>
-        <span className="text-sm font-medium">{agent.name}</span>
+        <span className="text-sm font-semibold text-white">{agent.name}</span>
         <span
           className={`inline-block w-2 h-2 rounded-full ${status.color}`}
           aria-label={status.label}

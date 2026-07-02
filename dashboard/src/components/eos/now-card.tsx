@@ -27,11 +27,11 @@ export function NowCard({ now, openTasks }: NowCardProps) {
   const displayNow: EosNow | null = now ?? deriveFromOpenTasks(openTasks);
 
   return (
-    <Card className="border-2 border-primary/40 bg-gradient-to-b from-primary/5 to-transparent">
-      <CardContent className="pt-8 pb-8">
+    <Card className="border-2 border-amber-500/60 bg-gradient-to-b from-amber-500/10 via-amber-500/[0.03] to-transparent shadow-2xl shadow-amber-500/10">
+      <CardContent className="pt-10 pb-10">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold uppercase tracking-widest text-primary/80 mb-3 flex items-center gap-2">
+            <div className="text-xs font-bold uppercase tracking-[0.25em] text-amber-400 mb-4 flex items-center gap-2">
               <IconTarget className="w-4 h-4" />
               Now
             </div>
@@ -43,22 +43,22 @@ export function NowCard({ now, openTasks }: NowCardProps) {
               />
             ) : displayNow ? (
               <>
-                <div className="text-3xl font-bold leading-tight text-foreground mb-2">
+                <div className="text-4xl font-bold leading-tight text-white mb-3">
                   {displayNow.title}
                 </div>
                 {displayNow.next_action && (
-                  <div className="text-lg text-muted-foreground">
-                    Next: <span className="text-foreground/90">{displayNow.next_action}</span>
+                  <div className="text-lg text-zinc-300">
+                    Next: <span className="text-white/95 font-medium">{displayNow.next_action}</span>
                   </div>
                 )}
                 {now === null && displayNow.from_task_id && (
-                  <div className="text-xs text-muted-foreground/70 mt-2">
+                  <div className="text-xs text-zinc-500 mt-3">
                     Auto-derived from {displayNow.from_task_id.slice(0, 20)}… (override anytime)
                   </div>
                 )}
               </>
             ) : (
-              <div className="text-xl text-muted-foreground italic">
+              <div className="text-2xl text-zinc-400 italic">
                 Nothing set. What&apos;s the ONE thing right now?
               </div>
             )}
