@@ -29,7 +29,17 @@ interface FactEntry {
   session_id: string;
   agent: string;
   org: string;
-  source: 'precompact';
+  /**
+   * PROVENANCE tag consumed by the memory_write_needs_provenance hard-rule.
+   * PreCompact summaries are agent-side reflections (summarizations of the
+   * agent's own turn record), so tag as 'agent-reasoning'. Never
+   * 'web-or-bridge' from this path — the compact summary can encapsulate
+   * web content, but the summary itself is the agent's synthesis.
+   */
+  source: 'agent-reasoning';
+  /** Legacy sub-classifier so callers can distinguish precompact from other
+   * agent-reasoning writes (future: heartbeat-fact, session-end-fact, etc.). */
+  extractor: 'precompact';
   summary: string;         // The compaction summary text
   keywords: string[];      // Extracted topic keywords for lightweight filtering
 }
@@ -119,7 +129,8 @@ async function main(): Promise<void> {
       session_id: payload.session_id || `session-${Date.now()}`,
       agent: env.agentName,
       org,
-      source: 'precompact',
+      source: 'agent-reasoning',
+      extractor: 'precompact',
       summary: summaryText.slice(0, 8000), // Cap at 8k chars
       keywords: extractKeywords(summaryText),
     };

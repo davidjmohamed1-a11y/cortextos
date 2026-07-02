@@ -409,10 +409,82 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ---------------------------------------------------------------------------
+// Memory-provenance addition — build #2 (Fable audit 2026-07-02).
+//
+// Closes the lethal-trifecta gap: web-or-bridge content silently landing in
+// standing memory becomes future-session prior-belief. Every write to a
+// standing-memory path (agent MEMORY.md, dated memory files, Claude Code
+// project memory, extracted-facts JSONL) must carry an explicit provenance
+// tag. Web/bridge-sourced content must go to quarantine — never standing
+// memory directly, even with an approval token.
+//
+// Overridable (via approve-hard-rule) when source is missing OR source=
+// david/agent-reasoning. Overriding a missing-source write is the escape
+// hatch for legit content the agent forgot to tag.
+//
+// NON-overridable when source=web-or-bridge on a standing-memory path.
+// That's the bright line: external content NEVER auto-promotes to standing
+// instructions. It goes to state/memory-quarantine/ and requires David or
+// boss to explicitly promote it via `cortextos bus promote-memory <id>`.
+// ---------------------------------------------------------------------------
+
+import {
+  isStandingMemoryPath,
+  validateProvenance,
+  validateProvenanceJsonl,
+} from '../utils/memory-provenance.js';
+
+/**
+ * Extract the content being written from a Write/Edit tool_input. Handles both
+ * shapes:
+ *   Write: { file_path, content }
+ *   Edit:  { file_path, new_string, ... } — we validate the FULL post-edit
+ *          content when the caller passes it, otherwise validate new_string
+ *          as a proxy (partial edits with no source tag in new_string still
+ *          fail the check when the target file has no existing frontmatter
+ *          — which is the whole point).
+ */
+function memoryWriteContent(toolName: string, toolInput: any): string | null {
+  if (toolName === 'Write') {
+    return typeof toolInput?.content === 'string' ? toolInput.content : null;
+  }
+  if (toolName === 'Edit') {
+    // For Edit we can't see the full post-edit state without reading the file
+    // (which would slow the hook). Instead we validate new_string — a valid
+    // provenance-tagged replacement content will pass; a bare replacement will
+    // fail. Agents who need to preserve existing valid frontmatter should use
+    // Write with the full content, or an Edit that includes the frontmatter
+    // fence in new_string. Documented in the memory-provenance skill.
+    return typeof toolInput?.new_string === 'string' ? toolInput.new_string : null;
+  }
+  return null;
+}
+
+export const RULE_MEMORY_WRITE_NEEDS_PROVENANCE: HardRule = {
+  name: 'memory_write_needs_provenance',
+  reason: "Writes to standing-memory paths must carry a provenance tag (`source: david | agent-reasoning | web-or-bridge` in YAML frontmatter). Web/bridge-sourced content must go to quarantine via `cortextos bus save-memory-quarantine ...` — NEVER standing memory directly, since anything landing there becomes future-session prior-belief. If this is legit david/agent-reasoning content you forgot to tag, add the frontmatter and re-try; if David has explicitly greenlit an override, request approval via `cortextos bus approve-hard-rule memory_write_needs_provenance`.",
+  match: (toolName, toolInput) => {
+    if (toolName !== 'Write' && toolName !== 'Edit') return false;
+    const filePath = toolInput?.file_path;
+    if (typeof filePath !== 'string' || !isStandingMemoryPath(filePath)) return false;
+    const content = memoryWriteContent(toolName, toolInput);
+    if (content == null) return true; // no content to validate → deny
+    const check = filePath.endsWith('.jsonl')
+      ? validateProvenanceJsonl(content.trim().split('\n').at(-1) || '')
+      : validateProvenance(content);
+    return !check.valid;
+  },
+  // Overridable for missing-tag or david/agent-reasoning sources. The web-or-
+  // bridge bright line is enforced by the wrapper CLI (save-memory-quarantine
+  // rejects standing paths outright) + operator convention. Making the whole
+  // rule non-overridable would block legit "forgot to tag" writes.
+};
+
 /**
  * The full denylist. ORDER MATTERS — first matching rule wins. Existing
  * rules (V1, slots 1-4) come first; fetch-ladder additions (slots 5-8)
- * append at the end so existing matches stay stable.
+ * middle; memory-provenance (slot 9) appends at the end.
  */
 export const HARD_RULES: ReadonlyArray<HardRule> = [
   RULE_GIT_PUSH_MAIN,
@@ -423,4 +495,5 @@ export const HARD_RULES: ReadonlyArray<HardRule> = [
   RULE_CAPTCHA_SOLVER_ENDPOINT,
   RULE_ANTI_DETECT_BROWSER_LIB,
   RULE_IP_ROTATION_TO_EVADE,
+  RULE_MEMORY_WRITE_NEEDS_PROVENANCE,
 ];

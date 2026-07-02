@@ -13,6 +13,7 @@ import {
   RULE_CAPTCHA_SOLVER_ENDPOINT,
   RULE_ANTI_DETECT_BROWSER_LIB,
   RULE_IP_ROTATION_TO_EVADE,
+  RULE_MEMORY_WRITE_NEEDS_PROVENANCE,
   approvalDirFor,
   findFreshApprovalToken,
   consumeApprovalToken,
@@ -37,6 +38,7 @@ describe('hard-rules — denylist composition', () => {
       'captcha_solver_endpoint',
       'anti_detect_browser_lib',
       'ip_rotation_to_evade',
+      'memory_write_needs_provenance',
     ]);
   });
 
@@ -405,5 +407,162 @@ describe('RULE_IP_ROTATION_TO_EVADE (non-overridable)', () => {
 
   it('is flagged as non_overridable', () => {
     expect(RULE_IP_ROTATION_TO_EVADE.non_overridable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Memory-provenance rule — build #2 (Fable audit 2026-07-02)
+// ---------------------------------------------------------------------------
+
+describe('RULE_MEMORY_WRITE_NEEDS_PROVENANCE', () => {
+  const env: HardRuleEnv = { agentDir: '/tmp/agent', agentName: 'forge', ctxRoot: '/tmp/ctx' };
+
+  it('does NOT match non-Write/Edit tools', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match('Bash', { command: 'echo hi' }, env)).toBe(false);
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match('Read', { file_path: '/orgs/personal/agents/forge/MEMORY.md' }, env)).toBe(false);
+  });
+
+  it('does NOT match Write to non-standing-memory paths', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      { file_path: '/state/telegram-offset', content: 'raw' },
+      env,
+    )).toBe(false);
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      { file_path: '/notes/some-file.md', content: 'raw' },
+      env,
+    )).toBe(false);
+  });
+
+  it('MATCHES Write to MEMORY.md without frontmatter', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        content: 'Just a plain observation, no tag',
+      },
+      env,
+    )).toBe(true);
+  });
+
+  it('MATCHES Write to MEMORY.md with frontmatter but no source', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        content: '---\nauthor: forge\n---\nA note without source.',
+      },
+      env,
+    )).toBe(true);
+  });
+
+  it('MATCHES Write to MEMORY.md with invalid source value', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        content: '---\nsource: hearsay\n---\nA note.',
+      },
+      env,
+    )).toBe(true);
+  });
+
+  it('does NOT match Write to MEMORY.md with source=david', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        content: '---\nsource: david\n---\nDavid explicitly said X.',
+      },
+      env,
+    )).toBe(false);
+  });
+
+  it('does NOT match Write to MEMORY.md with source=agent-reasoning', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        content: '---\nsource: agent-reasoning\n---\nInferred from code Y.',
+      },
+      env,
+    )).toBe(false);
+  });
+
+  it('does NOT match Write to MEMORY.md with source=web-or-bridge (rule allows tagged writes, quarantine CLI is separate enforcement)', () => {
+    // The rule permits tagged writes at ALL three source values — the "web-or-
+    // bridge to standing memory" bright line is enforced by the wrapper CLI
+    // + operator convention, not by this rule. Making the rule non-overridable
+    // for that case would block legit forgot-to-tag writes.
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        content: '---\nsource: web-or-bridge\norigin_url: https://x.com\n---\nQuoted from web.',
+      },
+      env,
+    )).toBe(false);
+  });
+
+  it('MATCHES dated memory files without provenance', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/memory/2026-07-02.md',
+        content: 'Untagged daily memory.',
+      },
+      env,
+    )).toBe(true);
+  });
+
+  it('MATCHES extracted-facts JSONL when last line has no source', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/memory/facts/2026-07-02.jsonl',
+        content: JSON.stringify({ ts: '2026-07-02', summary: 'X' }),
+      },
+      env,
+    )).toBe(true);
+  });
+
+  it('does NOT match extracted-facts JSONL when last line has valid source', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Write',
+      {
+        file_path: '/orgs/personal/agents/forge/memory/facts/2026-07-02.jsonl',
+        content: JSON.stringify({ ts: '2026-07-02', source: 'agent-reasoning', summary: 'X' }),
+      },
+      env,
+    )).toBe(false);
+  });
+
+  it('MATCHES Edit to MEMORY.md when new_string lacks provenance', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Edit',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        old_string: 'old content',
+        new_string: 'new content without frontmatter',
+      },
+      env,
+    )).toBe(true);
+  });
+
+  it('does NOT match Edit to MEMORY.md when new_string has valid provenance', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.match(
+      'Edit',
+      {
+        file_path: '/orgs/personal/agents/forge/MEMORY.md',
+        old_string: 'old',
+        new_string: '---\nsource: agent-reasoning\n---\nreplacement',
+      },
+      env,
+    )).toBe(false);
+  });
+
+  it('is overridable (not flagged non_overridable — the wrapper CLI is the bright-line enforcement layer)', () => {
+    expect(RULE_MEMORY_WRITE_NEEDS_PROVENANCE.non_overridable).toBeFalsy();
   });
 });

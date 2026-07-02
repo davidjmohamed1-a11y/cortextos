@@ -25,6 +25,7 @@ import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { registerBridgeCommands } from './bridge.js';
 import { registerFetchLadderCommands } from './fetch-ladder.js';
+import { registerMemoryQuarantineCommands } from './memory-quarantine.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
 import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition } from '../types/index.js';
 
@@ -2936,3 +2937,6 @@ registerBridgeCommands(busCommand);
 
 // Register fetch-ladder commands (fetch-url, site-policy show/list/forget).
 registerFetchLadderCommands(busCommand);
+
+// Register memory-quarantine commands (save-memory-quarantine, list-quarantine, promote-memory).
+registerMemoryQuarantineCommands(busCommand);

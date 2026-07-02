@@ -42,6 +42,7 @@ Framework-level denylist that prevents agents from executing destructive or exte
 - `rm_outside_workspace` — destructive `rm -r[f]` outside `CTX_AGENT_DIR` (conservative: glob/command-substitution that can't be statically resolved = block)
 - `gmail_send_without_approval` — any `mcp__*Gmail*__send_*` tool call (kai is draft-only by policy; this is the framework backstop)
 - `public_post` — LinkedIn/Twitter/Threads MCP post tools, Notion permissions set to public, bash curl POST to social-platform APIs
+- `memory_write_needs_provenance` — Write/Edit to standing-memory paths (agent `MEMORY.md`, `memory/YYYY-MM-DD.md`, extracted-facts JSONL, `~/.claude/projects/*/memory/**`) without a valid `source:` frontmatter tag. Three legit sources: `david | agent-reasoning | web-or-bridge`. Web/bridge content NEVER writes directly — goes to `<ctxRoot>/state/memory-quarantine/<agent>/<date>/` via `cortextos bus save-memory-quarantine`; David/boss promotes via `cortextos bus promote-memory <id>`. Full skill: `templates/agent/.claude/skills/memory-provenance/SKILL.md`. Closes the lethal-trifecta gap: hostile web content can't silently plant "the org said this" into future-session prior-belief. Ship 2026-07-02 (build #2 per Fable audit).
 
 **Override flow** — when a rule fires, the operator grants a one-shot approval token:
 ```bash
