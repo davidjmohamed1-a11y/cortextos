@@ -159,7 +159,7 @@ If N is zero, do NOT send a report — silence is fine for an empty inbox pass.
 When a Telegram document message arrives:
 
 ```
-=== TELEGRAM DOCUMENT from David (chat_id:5737043293) ===
+=== TELEGRAM DOCUMENT from David (chat_id:<user-chat-id>) ===
 caption: <caption if any>
 local_file: telegram-images/document_20260702_130400.pdf
 file_name: proposal.pdf

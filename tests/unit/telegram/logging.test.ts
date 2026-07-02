@@ -307,8 +307,8 @@ describe('recordInboundTelegram → comms-archive wire', () => {
   it('appends an inbound telegram archive entry for a text message', () => {
     const msg: TelegramMessage = {
       message_id: 100,
-      from: { id: 5737043293, first_name: 'David' } as any,
-      chat: { id: 5737043293, type: 'private' } as any,
+      from: { id: 999999999, first_name: 'TestUser' } as any,
+      chat: { id: 999999999, type: 'private' } as any,
       text: 'Hello agent',
       date: 1719900000,
     };
@@ -333,8 +333,8 @@ describe('recordInboundTelegram → comms-archive wire', () => {
   it('flags media_kind for a voice message (transcript empty at this point)', () => {
     const msg: TelegramMessage = {
       message_id: 101,
-      from: { id: 5737043293, first_name: 'David' } as any,
-      chat: { id: 5737043293, type: 'private' } as any,
+      from: { id: 999999999, first_name: 'TestUser' } as any,
+      chat: { id: 999999999, type: 'private' } as any,
       voice: { file_id: 'abc', file_unique_id: 'u', duration: 3, mime_type: 'audio/ogg' } as any,
       date: 1719900000,
     };
@@ -353,8 +353,8 @@ describe('recordInboundTelegram → comms-archive wire', () => {
   it('recordInboundVoiceTranscript adds a supplementary entry with the transcript', () => {
     const msg: TelegramMessage = {
       message_id: 102,
-      from: { id: 5737043293, first_name: 'David' } as any,
-      chat: { id: 5737043293, type: 'private' } as any,
+      from: { id: 999999999, first_name: 'TestUser' } as any,
+      chat: { id: 999999999, type: 'private' } as any,
       voice: { file_id: 'abc', file_unique_id: 'u', duration: 5, mime_type: 'audio/ogg' } as any,
       date: 1719900000,
     };
@@ -382,8 +382,8 @@ describe('recordInboundTelegram → comms-archive wire', () => {
   it('recordInboundVoiceTranscript is a no-op on empty transcript', () => {
     const msg: TelegramMessage = {
       message_id: 103,
-      from: { id: 5737043293, first_name: 'David' } as any,
-      chat: { id: 5737043293, type: 'private' } as any,
+      from: { id: 999999999, first_name: 'TestUser' } as any,
+      chat: { id: 999999999, type: 'private' } as any,
       voice: { file_id: 'x', file_unique_id: 'u', duration: 1, mime_type: 'audio/ogg' } as any,
       date: 1719900000,
     };
