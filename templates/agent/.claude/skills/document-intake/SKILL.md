@@ -8,7 +8,7 @@ triggers: ["document intake", "intake documents", "process docs", "process docum
 
 Native macOS extraction pipeline. David drops files in `~/Library/CloudStorage/OneDrive-Personal/Whitestone-Fleet/Inbox/documents/` (or sends a doc via Telegram); this skill scans, extracts text, identifies action items with your judgment, files them as tracked tasks, and archives the source.
 
-Same downstream spine as the voice channel: **capture → text → agent inbox → tracked task**. No Notion write in V1 (stretch, waits on the Boss Notion token flow).
+Same downstream spine as the voice channel: **capture → text → agent inbox → tracked task**. Notion Tasks DB mirror is now IN V1 (2026-07-02) as an OPTIONAL additive step (see below) — bus task creation is authoritative; Notion is the additive surface for David.
 
 ---
 
@@ -122,6 +122,39 @@ Assignee: default is the invoking agent (leave off unless it obviously belongs t
 If the doc has 5+ action items, create a PARENT task first with the doc name, then subtasks linked to it. Avoid task-storm.
 
 If nothing actionable exists after both passes, log a single "read + filed" task per above.
+
+---
+
+## Optional additive step — Notion Tasks DB mirror
+
+**Bus is the authoritative task record.** This step ADDS the same action into David's personal Notion Tasks DB (data_source `3902578e-ae0d-8122-aa1b-000b258ee02a`) so his EOS-shaped Tasks view surfaces it alongside the fleet.
+
+**Runs automatically when the Boss Notion token is available**; skips gracefully otherwise (bus task is unaffected). The helper reads the token at runtime from `~/Desktop/NOTION-BOSS-KEY.txt` (line format `BOSS_NOTION_TOKEN=ntn_...`) — never inline, never over the bus.
+
+After each `create-task` call, mirror the same action:
+
+```bash
+scripts/document-intake/notion-mirror.py \
+  --title "<same one-line action title as the bus task>" \
+  --owner "David"                          # or "Fleet" for fleet-doable, or a named agent \
+  --area "<Whitestone|Personal|Finance|System|Aviation|Community|...>" \
+  --layer "<Backend|Frontend|External|...>"    # only if inferable; omit otherwise \
+  --next-action "<the concrete next step in one sentence>" \
+  --notes "<any relevant surrounding text>" \
+  --source-doc "$file"
+```
+
+The script prints `notion-mirror: OK → <page-url>` on success, `notion-mirror: skipped — token file absent...` when the token isn't available, or an error diagnostic + exit 1 on API failure. In all failure modes the bus task creation ABOVE has already happened — this step never blocks it.
+
+**Do not mirror when**:
+- The action is a "read + filed" placeholder (creates Notion clutter for no reason).
+- The doc is a smoke test / obviously ephemeral (David asked you to test the pipeline).
+- The token file is absent (script handles this — just don't hard-fail).
+
+Owner mapping guidance:
+- **David** — needs his personal action / judgment / signature.
+- **Fleet** — fleet can execute without David; assign to a specific agent in the bus task and mirror as "Fleet" in Notion.
+- **<Agent name>** — when the action clearly belongs to one agent (kai for email drafts, donna for Whitestone-ops, atlas for research). Mirror the agent name.
 
 ---
 
