@@ -6,6 +6,7 @@ import {
   logOutboundMessage,
   logInboundMessage,
   recordInboundTelegram,
+  recordInboundVoiceTranscript,
   cacheLastSent,
   readLastSent,
 } from '../../../src/telegram/logging';
@@ -277,5 +278,120 @@ describe('TelegramAPI.sendPhoto', () => {
     expect(body.get('photo')).toBeInstanceOf(Blob);
     expect(body.get('caption')).toBeNull();
     expect(body.get('reply_markup')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Comms-archive wire on the inbound Telegram path — the C6 hot-path that
+// the header of src/bus/comms-archive.ts declared. Voice-transcription
+// build 2026-07-02 closes the gap by wiring appendCommsArchive inside
+// recordInboundTelegram + adding recordInboundVoiceTranscript for
+// async transcripts.
+// ---------------------------------------------------------------------------
+
+describe('recordInboundTelegram → comms-archive wire', () => {
+  let testDir: string;
+  beforeEach(() => { testDir = mkdtempSync(join(tmpdir(), 'cortextos-tg-arc-')); });
+  afterEach(() => { rmSync(testDir, { recursive: true, force: true }); });
+
+  const busPathsFor = (root: string, agent: string): BusPaths => ({
+    ctxRoot: root,
+    inbox: join(root, 'inbox', agent),
+    inflight: join(root, 'inflight', agent),
+    processed: join(root, 'processed', agent),
+    logDir: join(root, 'logs', agent),
+    stateDir: join(root, 'state', agent),
+    taskDir: join(root, 'tasks'),
+  } as BusPaths);
+
+  it('appends an inbound telegram archive entry for a text message', () => {
+    const msg: TelegramMessage = {
+      message_id: 100,
+      from: { id: 5737043293, first_name: 'David' } as any,
+      chat: { id: 5737043293, type: 'private' } as any,
+      text: 'Hello agent',
+      date: 1719900000,
+    };
+    const paths = busPathsFor(testDir, 'kai');
+    mkdirSync(paths.inbox, { recursive: true });
+    recordInboundTelegram(paths, testDir, 'kai', 'personal', 'David', msg);
+
+    const yyyymm = new Date().toISOString().slice(0, 7);
+    const arcPath = join(testDir, 'analytics', 'comms', yyyymm, 'kai.jsonl');
+    const lines = readFileSync(arcPath, 'utf-8').trim().split('\n');
+    expect(lines.length).toBe(1);
+    const entry = JSON.parse(lines[0]);
+    expect(entry.agent).toBe('kai');
+    expect(entry.direction).toBe('inbound');
+    expect(entry.channel).toBe('telegram');
+    expect(entry.text).toBe('Hello agent');
+    expect(entry.msg_id).toBe('100');
+    expect(entry.metadata.has_media).toBe(false);
+    expect(entry.metadata.media_kind).toBeNull();
+  });
+
+  it('flags media_kind for a voice message (transcript empty at this point)', () => {
+    const msg: TelegramMessage = {
+      message_id: 101,
+      from: { id: 5737043293, first_name: 'David' } as any,
+      chat: { id: 5737043293, type: 'private' } as any,
+      voice: { file_id: 'abc', file_unique_id: 'u', duration: 3, mime_type: 'audio/ogg' } as any,
+      date: 1719900000,
+    };
+    const paths = busPathsFor(testDir, 'alfred');
+    mkdirSync(paths.inbox, { recursive: true });
+    recordInboundTelegram(paths, testDir, 'alfred', 'personal', 'David', msg);
+
+    const yyyymm = new Date().toISOString().slice(0, 7);
+    const arcPath = join(testDir, 'analytics', 'comms', yyyymm, 'alfred.jsonl');
+    const entry = JSON.parse(readFileSync(arcPath, 'utf-8').trim());
+    expect(entry.metadata.has_media).toBe(true);
+    expect(entry.metadata.media_kind).toBe('voice');
+    expect(entry.text).toBe('');
+  });
+
+  it('recordInboundVoiceTranscript adds a supplementary entry with the transcript', () => {
+    const msg: TelegramMessage = {
+      message_id: 102,
+      from: { id: 5737043293, first_name: 'David' } as any,
+      chat: { id: 5737043293, type: 'private' } as any,
+      voice: { file_id: 'abc', file_unique_id: 'u', duration: 5, mime_type: 'audio/ogg' } as any,
+      date: 1719900000,
+    };
+    const paths = busPathsFor(testDir, 'boss-personal');
+    mkdirSync(paths.inbox, { recursive: true });
+
+    // Simulates the two-step flow: primary record (empty text) then transcript.
+    recordInboundTelegram(paths, testDir, 'boss-personal', 'personal', 'David', msg);
+    recordInboundVoiceTranscript(testDir, 'boss-personal', 'David', msg, 'This is the transcribed voice note.');
+
+    const yyyymm = new Date().toISOString().slice(0, 7);
+    const arcPath = join(testDir, 'analytics', 'comms', yyyymm, 'boss-personal.jsonl');
+    const lines = readFileSync(arcPath, 'utf-8').trim().split('\n');
+    expect(lines.length).toBe(2);
+    const primary = JSON.parse(lines[0]);
+    const supplementary = JSON.parse(lines[1]);
+    expect(primary.metadata.media_kind).toBe('voice');
+    expect(primary.text).toBe('');
+    expect(supplementary.text).toBe('This is the transcribed voice note.');
+    expect(supplementary.metadata.supplementary_entry).toBe(true);
+    expect(supplementary.metadata.transcript_source).toBe('whisper.cpp');
+    expect(supplementary.msg_id).toBe('102');
+  });
+
+  it('recordInboundVoiceTranscript is a no-op on empty transcript', () => {
+    const msg: TelegramMessage = {
+      message_id: 103,
+      from: { id: 5737043293, first_name: 'David' } as any,
+      chat: { id: 5737043293, type: 'private' } as any,
+      voice: { file_id: 'x', file_unique_id: 'u', duration: 1, mime_type: 'audio/ogg' } as any,
+      date: 1719900000,
+    };
+    // No primary record — just the supplementary attempt.
+    recordInboundVoiceTranscript(testDir, 'kai', 'David', msg, '   ');
+    const yyyymm = new Date().toISOString().slice(0, 7);
+    const arcPath = join(testDir, 'analytics', 'comms', yyyymm, 'kai.jsonl');
+    // No archive file should exist since we didn't append anything.
+    expect(() => readFileSync(arcPath)).toThrow();
   });
 });

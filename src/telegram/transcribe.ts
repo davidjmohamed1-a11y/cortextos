@@ -28,7 +28,15 @@ function resolveModelPath(): string {
 }
 
 function resolveBin(envVar: string, fallback: string): string {
-  return process.env[envVar] || fallback;
+  // Precedence: env override > ~/.cortextos/bin/<name> (fleet install target,
+  // populated by scripts/install-voice-transcription.sh) > $PATH fallback name.
+  // The fleet-install path lets whisper-cli + ffmpeg live outside $PATH so
+  // David never has to touch shell config.
+  const envVal = process.env[envVar];
+  if (envVal) return envVal;
+  const fleetPath = path.join(os.homedir(), '.cortextos', 'bin', fallback);
+  if (fs.existsSync(fleetPath)) return fleetPath;
+  return fallback;
 }
 
 function resolveLang(): string {

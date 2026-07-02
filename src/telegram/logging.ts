@@ -7,6 +7,7 @@
 import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { logEvent } from '../bus/event.js';
+import { appendCommsArchive } from '../bus/comms-archive.js';
 import type { BusPaths, TelegramMessage } from '../types/index.js';
 
 /**
@@ -105,6 +106,38 @@ export function recordInboundTelegram(
   });
 
   const hasMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
+
+  // Comms-archive wire (C6 hot-path — closes the gap declared in
+  // src/bus/comms-archive.ts header). Fires for every inbound Telegram
+  // regardless of media type. Voice/audio messages arrive with empty text
+  // here (transcript is computed later async); the transcript gets a
+  // supplementary archive entry from agent-manager.ts after transcribeVoice
+  // resolves.
+  const mediaKind = msg.photo ? 'photo'
+    : msg.document ? 'document'
+    : msg.voice ? 'voice'
+    : msg.audio ? 'audio'
+    : msg.video ? 'video'
+    : msg.video_note ? 'video_note'
+    : null;
+  appendCommsArchive({
+    ctxRoot,
+    agent: agentName,
+    direction: 'inbound',
+    channel: 'telegram',
+    sender: fromName,
+    recipient: agentName,
+    text,
+    msg_id: String(msg.message_id ?? ''),
+    reply_to: msg.reply_to_message ? String(msg.reply_to_message.message_id ?? '') : '',
+    metadata: {
+      chat_id: msg.chat?.id,
+      from_id: msg.from?.id,
+      has_media: hasMedia,
+      media_kind: mediaKind,
+    },
+  });
+
   try {
     logEvent(paths, agentName, org, 'message', 'telegram_received', 'info', {
       chat_id: String(msg.chat?.id ?? ''),
@@ -117,6 +150,45 @@ export function recordInboundTelegram(
   } catch (err) {
     log?.(`logEvent(telegram_received) failed: ${err}`);
   }
+}
+
+/**
+ * Supplementary comms-archive entry for a voice/audio message whose
+ * transcript was computed asynchronously (via src/telegram/transcribe.ts).
+ * Called from agent-manager.ts's media-message handler after
+ * processMediaMessage() resolves with a transcript.
+ *
+ * Rationale: the primary `recordInboundTelegram` archive entry fires at
+ * message-receipt time with empty text (the transcript is not yet
+ * available). This second entry captures the transcript itself as a
+ * distinct archive line so searches for the transcript content find it.
+ */
+export function recordInboundVoiceTranscript(
+  ctxRoot: string,
+  agentName: string,
+  fromName: string,
+  msg: TelegramMessage,
+  transcript: string,
+): void {
+  if (!transcript || !transcript.trim()) return;
+  appendCommsArchive({
+    ctxRoot,
+    agent: agentName,
+    direction: 'inbound',
+    channel: 'telegram',
+    sender: fromName,
+    recipient: agentName,
+    text: transcript.trim(),
+    msg_id: String(msg.message_id ?? ''),
+    reply_to: '',
+    metadata: {
+      chat_id: msg.chat?.id,
+      from_id: msg.from?.id,
+      media_kind: msg.voice ? 'voice' : msg.audio ? 'audio' : 'unknown',
+      transcript_source: 'whisper.cpp',
+      supplementary_entry: true,
+    },
+  });
 }
 
 /**

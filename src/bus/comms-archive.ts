@@ -17,11 +17,16 @@
  *   sources (Telegram chat history, inbox file dirs, event logs); a thrown
  *   error would break the user-facing comms path.
  *
- * Hot-paths wired in this module's V1:
- *   - src/bus/message.ts sendMessage     → channel='agent_bus', direction='outbound'
- *   - src/bus/message.ts checkInbox      → channel='agent_bus', direction='inbound'
- *   - src/cli/bus.ts    send-telegram    → channel='telegram',  direction='outbound'
- *   - src/daemon/fast-checker.ts inbound → channel='telegram',  direction='inbound'
+ * Hot-paths wired:
+ *   - src/bus/message.ts sendMessage         → channel='agent_bus', direction='outbound'  (V1, C6)
+ *   - src/bus/message.ts checkInbox          → channel='agent_bus', direction='inbound'   (V1, C6)
+ *   - src/cli/bus.ts    send-telegram        → channel='telegram',  direction='outbound'  (V1, C6)
+ *   - src/telegram/logging.ts recordInboundTelegram  → channel='telegram', direction='inbound'
+ *       (V1.1 fill-in of the gap the C6 header aspirationally claimed; wired
+ *       2026-07-02 during the voice-transcription capture-channel build.
+ *       Covers text + all media types; voice/audio gets a supplementary
+ *       archive entry from recordInboundVoiceTranscript() once the async
+ *       whisper.cpp transcript resolves.)
  */
 
 import { appendFileSync, existsSync, readdirSync, readFileSync } from 'fs';
