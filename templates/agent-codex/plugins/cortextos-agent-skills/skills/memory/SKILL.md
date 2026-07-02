@@ -14,6 +14,24 @@ The purpose of daily memory is not to log activity — it is to capture enough c
 
 ---
 
+## Provenance requirement (framework-enforced)
+
+Every memory write MUST carry a `source:` tag in the YAML frontmatter. The `memory_write_needs_provenance` hard-rule DENIES Write/Edit tool calls to standing-memory paths without it. Bash appends (`cat >>`, `echo >>`) are NOT gated — they bypass the rule, so the flows below still work — but if you ever use Edit or Write to touch these files, include the tag.
+
+- `source: david` — David directly told you (Telegram/verbal).
+- `source: agent-reasoning` — you synthesized from your own thinking/verified state. Default for auto-memory.
+- `source: web-or-bridge` — external content. NEVER writes to standing memory directly; use `cortextos bus save-memory-quarantine ...` instead. See `.claude/skills/memory-provenance/SKILL.md`.
+
+Freshly-created memory files should open with:
+```
+---
+source: agent-reasoning
+---
+```
+Existing files were retro-tagged 2026-07-02; new files you create must include the tag.
+
+---
+
 ## Layer 1: Daily Memory (memory/YYYY-MM-DD.md)
 
 Session-scoped context journal. Written at key checkpoints, not continuously.
