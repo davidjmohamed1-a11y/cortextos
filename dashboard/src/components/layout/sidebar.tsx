@@ -34,6 +34,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   // Core
+  { label: 'EOS', href: '/eos', icon: IconTarget, section: 'core' },
   { label: 'Overview', href: '/', icon: IconLayoutDashboard, section: 'core' },
   { label: 'Agents', href: '/agents', icon: IconRobot, section: 'core' },
   { label: 'Tasks', href: '/tasks', icon: IconListCheck, section: 'core' },
