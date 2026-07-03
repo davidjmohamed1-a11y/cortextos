@@ -83,6 +83,49 @@ Pure read-only — never writes to PTY, never sends prompts. Falls through grace
 
 Spec: `orgs/personal/agents/forge/specs/watchdog-liveness-probe-2026-06-29.md`.
 
+## Sleep-time consolidation cron (per-agent, ACE-strict)
+
+The "fleet gets smarter while David sleeps" flagship. Each agent gets a nightly consolidation job that runs in the nighttime window (currently wasted): reads yesterday's REAL activity (comms archive JSONL + task results + daily memory), extracts candidate learnings mechanically, dedupes against existing MEMORY.md lines, appends the top-5 as small itemized additions, and pre-computes a morning brief so first-heartbeat-of-day is a READ, not a 7am walk. Ships 2026-07-02 (Fable-audit follow-on / roadmap #1, per boss GO).
+
+**ACE (anti-context-collapse) enforcement — the load-bearing rule**:
+- Script NEVER READS the CONTENT of existing MEMORY.md lines to summarize / rewrite / merge — existing content is byte-identical before/after (test 7 asserts this).
+- Script ONLY reads existing lines to DEDUP against candidate additions (substring match, no synthesis).
+- Cap at 5 new lines/night/agent (`CONSOLIDATOR_CAP` env override) — forces prioritization; prevents drift.
+- Each new line is literal + dated + attributed: `- [YYYY-MM-DD by:nightly-consolidator] <fact>`.
+- Extraction is MECHANICAL (regex + heuristic) — NO LLM synthesis. Real semantic work happens agent-side when they read the brief the next morning.
+
+**Signal + weight** (tunable via env vars):
+- Explicit preference markers ("from now on", "always", "never", "prefer", "the rule is", …) → weight 3
+- Correction signals ("caught", "flagged", "wrong call", "mistake", "regression", "lesson") → weight 2
+- Task completions with results → weight 2 (extracts title + commit SHA if present)
+- Repeat topics (bigrams appearing ≥3× across day AND overlap task text) → weight 1
+- Top-5 after dedup wins.
+
+**Weekend grace**: Sunday nights consolidate Fri+Sat+Sun together. Otherwise single-day (yesterday only).
+
+**Human-task completions** (assigned_to=human/user/david) are included in the extraction — David's completions are the strongest learning signal.
+
+**Provenance-rule interaction**: MEMORY.md's top-level frontmatter (`source: agent-reasoning`, retro-tagged fleet-wide 2026-07-02) satisfies the `memory_write_needs_provenance` hard rule for the whole file. Appended lines inherit that provenance. Test 8 asserts this holds after every append.
+
+**Morning brief** at `<ctxRoot>/state/morning-brief/<agent>/<YYYY-MM-DD>.md`:
+- 7 sections: Yesterday recap · End-of-day focus · Open threads · Waiting on · New learnings persisted · Suggested next · Frontmatter
+- Own frontmatter carries `source: agent-reasoning` + `generated_at` + `by: nightly-consolidator` + `for_date` + `consolidated_dates`
+- Agents read this on their FIRST heartbeat of the day (see Step 0 in `templates/agent/HEARTBEAT.md`) — replaces the "walk comms + tasks + memory live" phase for that cycle. Fallback = standard walk if the brief is missing.
+
+**Operator CLI**:
+```bash
+scripts/consolidation/nightly-consolidator.py --agent forge                      # live-mode
+scripts/consolidation/nightly-consolidator.py --agent forge --dry-run            # classify + report, no writes
+scripts/consolidation/nightly-consolidator.py --agent forge --cap 10             # override the 5-line cap
+scripts/consolidation/nightly-consolidator.py --agent forge --now 2026-07-03T04:00Z   # test-only fixed-time override
+```
+
+**Cron registration**: 10 crons on the daemon scheduler (one per agent), staggered 30s apart between 03:30 and 03:34:30 UTC (11:30 PM - 11:34:30 PM ET) to avoid IO contention. Configured via `cortextos bus add-cron <agent> nightly-consolidation "<cron-expr>" "<prompt>"`.
+
+**Tests**: `tests/consolidation/nightly-consolidator.test.sh` — 8 controlled-fixture cases: no_new_learnings, explicit_preference, task_completion, dedup_existing, cap_enforcement, morning_brief_write, ace_no_rewrite (existing content byte-identical), provenance_satisfied (rule check post-append). All 8 pass.
+
+**Skill**: `templates/agent/.claude/skills/morning-brief/SKILL.md` (+ codex mirror). Teaches agents to read the pre-computed brief at session start / first-heartbeat-of-day.
+
 ## Nightly truth-reconciliation cron
 
 Formalizes the "verify each item is live" rule mechanically. Every night at 03:00 ET (07:00 UTC) atlas fires `nightly-truth-reconciliation`, which walks every open+in-progress bus task across every org and matches it against reality (git-log commit signals + stale thresholds + active-work-skip guard). Ships 2026-07-02 (build #1 per Fable audit).

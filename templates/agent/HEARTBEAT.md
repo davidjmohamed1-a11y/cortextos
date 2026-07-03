@@ -3,6 +3,21 @@
 This runs on your heartbeat cron (every 4 hours). Execute EVERY step in order.
 Skipping steps = broken system. The dashboard monitors your compliance.
 
+## Step 0: Check the morning brief (first heartbeat of the day only)
+
+If this is your FIRST heartbeat since the nightly-consolidator ran (~03:30 UTC), check for a pre-computed brief:
+
+```bash
+BRIEF="$CTX_ROOT/state/morning-brief/$CTX_AGENT_NAME/$(date -u +%Y-%m-%d).md"
+if [ -f "$BRIEF" ]; then cat "$BRIEF"; fi
+```
+
+If the brief exists, absorb it and treat it as your yesterday-recap + open-threads + suggested-next handoff — you don't need to walk comms + tasks + memory live for this cycle. If it's missing, fall back to the normal walk. Full reference: `.claude/skills/morning-brief/SKILL.md`.
+
+Skip Step 0 on non-first-of-day heartbeats (the brief is a once-a-day artifact).
+
+---
+
 ## Step 1: Update heartbeat (DO THIS FIRST)
 
 ```bash
